@@ -186,6 +186,7 @@ class TestNet(tf.test.TestCase):
         self.generate = False
         self.momentum = MOMENTUM
         self.global_conditioning = False
+        self.local_conditioning = False
         self.train_iters = TRAIN_ITERATIONS
         self.net = WaveNetModel(batch_size=1,
                                 dilations=[1, 2, 4, 8, 16, 32, 64,
@@ -196,7 +197,8 @@ class TestNet(tf.test.TestCase):
                                 quantization_channels=QUANTIZATION_CHANNELS,
                                 skip_channels=32,
                                 global_condition_channels=None,
-                                global_condition_cardinality=None)
+                                global_condition_cardinality=None,
+                                local_conditiion_channels=None)
 
     def _save_net(sess):
         saver = tf.train.Saver(var_list=tf.trainable_variables())
@@ -211,15 +213,19 @@ class TestNet(tf.test.TestCase):
 
     def testEndToEndTraining(self):
         def CreateTrainingFeedDict(audio, speaker_ids, audio_placeholder,
-                                   gc_placeholder, i):
+                                   gc_placeholder, i, lc_placeholder):
             speaker_index = 0
             if speaker_ids is None:
                 # No global conditioning.
                 feed_dict = {audio_placeholder: audio}
-            else:
+            elif lc_placeholder is None:
                 feed_dict = {audio_placeholder: audio,
                              gc_placeholder: speaker_ids}
-            return feed_dict, speaker_index
+            else:
+                feed_dict =  {audio_placeholder: audio,
+                              gc_placeholder: speaker_ids,
+                              lc_placeholder: local_conditions}
+            return feed_dict, speaker_index, local_conditions
 
         np.random.seed(42)
         audio, speaker_ids = make_sine_waves(self.global_conditioning)
@@ -258,8 +264,9 @@ class TestNet(tf.test.TestCase):
         initial_loss = None
         operations = [loss, optim]
         with self.test_session() as sess:
-            feed_dict, speaker_index = CreateTrainingFeedDict(
-                audio, speaker_ids, audio_placeholder, gc_placeholder, 0)
+            feed_dict, speaker_index, local_conditions = CreateTrainingFeedDict(
+                audio, speaker_ids, audio_placeholder, gc_placeholder, 0,
+                lc_placeholder)
             sess.run(init)
             initial_loss = sess.run(loss, feed_dict=feed_dict)
             for i in range(self.train_iters):
@@ -402,6 +409,30 @@ class TestNetWithGlobalConditioning(TestNet):
                                 skip_channels=256,
                                 global_condition_channels=NUM_SPEAKERS,
                                 global_condition_cardinality=NUM_SPEAKERS)
+
+
+#class TestNetWithLocalConditioning(TestNet):
+#      def setUp(self):
+#          print('TestNetWithLocalConditioning setup.')
+#          sys.stdout.flush()
+
+#          self.optimizer_type = 'sgd'
+#          self.learning_rate = 0.01
+#          self.generate = True
+#          self.momentum = MOMENTUM
+#          self.global_conditioning = False
+#          self.local_conditioning = True
+#          self.train_iters = 1000
+#          self.net = WaveNetModel(batch_size=NUM_SPEAKERS,
+#                                  dilations=[1, 2, 4, 8, 16, 32, 64,
+#                                             1, 2, 4, 8, 16, 32, 64],
+#                                  filter_width=2,
+#                                  residual_channels=32,
+#                                  dilation_channels=32,
+#                                  quantization_channels=QUANTIZATION_CHANNELS,
+#                                  use_biases=True,
+#                                  skip_channels=256,
+#                                  local_condition_channels=32)
 
 
 if __name__ == '__main__':
