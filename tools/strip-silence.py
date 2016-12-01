@@ -42,12 +42,25 @@ def find_files(source_directory, target_directory, pattern='*.wav'):
 
 def trim_silence(audio, threshold):
     '''Removes silence at the beginning and end of a sample.'''
-    energy = librosa.feature.rmse(audio)
+    energy = librosa.feature.rmse(audio, hop_length=512)
     frames = np.nonzero(energy > threshold)
     indices = librosa.core.frames_to_samples(frames)[1]
+    start_index = indices[0] if indices.size else 0
+    si1 = start_index
+    SILENCE_BUFFER = 2000
+    start_index -= SILENCE_BUFFER
+    if start_index < 0:
+        start_index = 0
+    end_index = indices[-1] if indices.size else 0
+    ei1 = end_index
+    end_index += SILENCE_BUFFER
+    if end_index >= len(audio):
+        end_index = len(audio)-1
+
+    print("ei:{} si:{} start_index:{} end_index:{} len(audio):{}".format(ei1, si1, start_index, end_index, len(audio)))
 
     # Note: indices can be an empty array, if the whole audio was silence.
-    return audio[indices[0]:indices[-1]] if indices.size else audio[0:0]
+    return audio[start_index:end_index]
 
 def main():
     args = get_arguments()
@@ -57,7 +70,16 @@ def main():
         audio, _ = librosa.load(source_file, sr=args.sample_rate, mono=True)
         trimmed = trim_silence(audio, args.threshold)
         print("original len:{}, trimmed len:{}".format(len(audio),len(trimmed)))
+        if not os.path.exists(os.path.dirname(target_file)):
+            try:
+                os.makedirs(os.path.dirname(target_file))
+            except OSError as exc: # Guard against race condition
+                if exc.errno != errno.EEXIST:
+                    raise
 
+        if len(trimmed) > 0:
+            librosa.output.write_wav(target_file, trimmed,
+                                     args.sample_rate)
 
 
 
