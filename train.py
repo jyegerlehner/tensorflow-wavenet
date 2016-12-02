@@ -32,6 +32,7 @@ L2_REGULARIZATION_STRENGTH = 0
 SILENCE_THRESHOLD = 0.3
 EPSILON = 0.001
 MOMENTUM = 0.9
+BLACKLIST='./blacklist.json'
 
 
 def get_arguments():
@@ -76,6 +77,9 @@ def get_arguments():
                         help='Learning rate for training.')
     parser.add_argument('--wavenet_params', type=str, default=WAVENET_PARAMS,
                         help='JSON file with the network parameters.')
+    parser.add_argument('--blacklist', type=str, default=BLACKLIST,
+                        help='JSON file containing set of file names to be '
+                             'ignored while training (sans file extension).')
     parser.add_argument('--sample_size', type=int, default=SAMPLE_SIZE,
                         help='Concatenate and cut audio samples to this many '
                         'samples.')
@@ -201,6 +205,9 @@ def main():
     with open(args.wavenet_params, 'r') as f:
         wavenet_params = json.load(f)
 
+    with open(args.blacklist, 'r') as f:
+        blacklist = set(json.load(f))
+
     # Create coordinator.
     coord = tf.train.Coordinator()
 
@@ -217,7 +224,8 @@ def main():
             sample_rate=wavenet_params['sample_rate'],
             gc_enabled=gc_enabled,
             sample_size=args.sample_size,
-            silence_threshold=args.silence_threshold)
+            silence_threshold=args.silence_threshold,
+            blacklist=blacklist)
         audio_batch = reader.dequeue(args.batch_size)
         if gc_enabled:
             gc_id_batch = reader.dequeue_gc(args.batch_size)

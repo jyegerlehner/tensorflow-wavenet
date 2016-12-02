@@ -32,18 +32,20 @@ def randomize_files(files):
         yield files[file_index]
 
 
-def find_files(directory, pattern='*.wav'):
+def find_files(directory, pattern='*.wav', blacklist=None):
     '''Recursively finds all files matching the pattern.'''
     files = []
     for root, dirnames, filenames in os.walk(directory):
         for filename in fnmatch.filter(filenames, pattern):
-            files.append(os.path.join(root, filename))
+            base, ext = os.path.splitext(filename)
+            if blacklist is None or base not in blacklist:
+                files.append(os.path.join(root, filename))
     return files
 
 
-def load_generic_audio(directory, sample_rate):
+def load_generic_audio(directory, sample_rate, blacklist):
     '''Generator that yields audio waveforms from the directory.'''
-    files = find_files(directory)
+    files = find_files(directory, blacklist=blacklist)
     id_reg_exp = re.compile(FILE_PATTERN)
     print("files length: {}".format(len(files)))
     randomized_files = randomize_files(files)
@@ -93,7 +95,8 @@ class AudioReader(object):
                  gc_enabled,
                  sample_size,
                  silence_threshold=None,
-                 queue_size=32):
+                 queue_size=32,
+                 blacklist=None):
         self.audio_dir = audio_dir
         self.sample_rate = sample_rate
         self.coord = coord
@@ -106,6 +109,7 @@ class AudioReader(object):
                                          ['float32'],
                                          shapes=[(None, 1)])
         self.enqueue = self.queue.enqueue([self.sample_placeholder])
+        self.blacklist = blacklist
 
         if self.gc_enabled:
             self.id_placeholder = tf.placeholder(dtype=tf.int32, shape=())
@@ -116,7 +120,7 @@ class AudioReader(object):
         # TODO Find a better way to check this.
         # Checking inside the AudioReader's thread makes it hard to terminate
         # the execution of the script, so we do it in the constructor for now.
-        files = find_files(audio_dir)
+        files = find_files(audio_dir, blacklist=blacklist)
         if not files:
             raise ValueError("No audio files found in '{}'.".format(audio_dir))
         if self.gc_enabled and not_all_have_id(files):
@@ -151,7 +155,8 @@ class AudioReader(object):
         stop = False
         # Go through the dataset multiple times
         while not stop:
-            iterator = load_generic_audio(self.audio_dir, self.sample_rate)
+            iterator = load_generic_audio(self.audio_dir, self.sample_rate,
+                                          self.blacklist)
             for audio, filename, category_id in iterator:
                 if self.coord.should_stop():
                     stop = True

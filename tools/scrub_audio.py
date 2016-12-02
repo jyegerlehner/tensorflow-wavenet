@@ -8,10 +8,10 @@ import os
 import os.path
 import pandas as pd
 
-MIN_SAMPLES = 5000
+MIN_SAMPLES = 10000
 #ratio of samples to chars
 MIN_RATIO = 400
-MAX_RATIO = 2000
+MAX_RATIO = 2500
 
 df = pd.read_csv('out.csv')
 mat = df.as_matrix()
