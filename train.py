@@ -33,7 +33,9 @@ SILENCE_THRESHOLD = 0.3
 EPSILON = 0.001
 MOMENTUM = 0.9
 BLACKLIST='./blacklist.json'
-
+ENCODER_CHANNELS = 48
+ENCODER_OUTPUT_CHANNELS = 512
+LOCAL_CONDITION_CHANNELS = 32
 
 def get_arguments():
     def _str_to_bool(s):
@@ -102,6 +104,17 @@ def get_arguments():
                          help='Whether to store histogram summaries.')
     parser.add_argument('--gc_channels', type=int, default=None,
                         help='Number of global condition channels.')
+    parser.add_argument('--encoder_channels', type=int,
+                        default=ENCODER_CHANNELS,
+                        help='Number of channels in the text encoder net.')
+    parser.add_argument('--encoder_output_channels', type=int,
+                        default=ENCODER_OUTPUT_CHANNELS,
+                        help='Number of output channels from the text encoder '
+                             'net.')
+    parser.add_argument('--lc_channels', type=int,
+                        default=LOCAL_CONDITION_CHANNELS,
+                        help='Number of channels in the upsampled local '
+                             'condition fed to the audio wavenet.')
     return parser.parse_args()
 
 
@@ -186,7 +199,6 @@ def validate_directories(args):
 
 def main():
     args = get_arguments()
-
     try:
         directories = validate_directories(args)
     except ValueError as e:
@@ -226,11 +238,20 @@ def main():
             sample_size=args.sample_size,
             silence_threshold=args.silence_threshold,
             blacklist=blacklist)
-        audio_batch = reader.dequeue(args.batch_size)
+        audio_batch, text_batch = reader.dequeue(args.batch_size)
+
         if gc_enabled:
             gc_id_batch = reader.dequeue_gc(args.batch_size)
         else:
             gc_id_batch = None
+
+    # Create text encoder network.
+    text_encoder = ConvNetModel(
+        batch_size=args.batch_size,
+        encoder_channels=args.encoder_channels,
+        histograms=args.histograms,
+        output_channels=args.encoder_output_channels,
+        local_condition_channels=args.lc_channels)
 
     # Create network.
     net = WaveNetModel(
@@ -246,12 +267,25 @@ def main():
         initial_filter_width=wavenet_params["initial_filter_width"],
         histograms=args.histograms,
         global_condition_channels=args.gc_channels,
-        global_condition_cardinality=reader.gc_category_cardinality)
+        global_condition_cardinality=reader.gc_category_cardinality,
+        local_condition_channels=args.lc_channels)
+
+
     if args.l2_regularization_strength == 0:
         args.l2_regularization_strength = None
-    loss = net.loss(input_batch=audio_batch,
-                    global_condition_batch=gc_id_batch,
-                    l2_regularization_strength=args.l2_regularization_strength)
+
+    local_condition = text_encoder.upsample(text_batch)
+#    loss = net.loss(input_batch=audio_batch,
+#                    global_condition_batch=gc_id_batch,
+#                    local_condition_batch=local_condition,
+#                    l2_regularization_strength=args.l2_regularization_strength)
+
+    loss = net.ctc_loss(input_batch=audio_batch,
+                        global_condition_batch=gc_id_batch,
+                        local_condition_batch=local_condition,
+                        l2_regularization_strength=
+                            args.l2_regularization_strength)
+
     optimizer = optimizer_factory[args.optimizer](
                     learning_rate=args.learning_rate,
                     momentum=args.momentum)
@@ -292,6 +326,8 @@ def main():
     try:
         last_saved_step = saved_global_step
         for step in range(saved_global_step + 1, args.num_steps):
+            if coord.should_stop():
+                break
             start_time = time.time()
             if args.store_metadata and step % 50 == 0:
                 # Slow run that stores extra information for debugging.

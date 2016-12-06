@@ -30,12 +30,12 @@ def find_files(source_directory, pattern='*.wav'):
     for root, dirnames, filenames in os.walk(source_directory):
         for filename in fnmatch.filter(filenames, pattern):
             wav_file = os.path.join(root, filename)
-            (b, e) = os.path.splitext(filename)
-            wave_files[b] = wav_file
+            (base, _) = os.path.splitext(filename)
+            wave_files[base] = wav_file
 
         for filename in fnmatch.filter(filenames, "*.txt"):
             txt_file = os.path.join(root, filename)
-            base, ext = os.path.splitext(filename)
+            (base, _) = os.path.splitext(filename)
             text_files[base] = txt_file
 
     return wave_files, text_files
