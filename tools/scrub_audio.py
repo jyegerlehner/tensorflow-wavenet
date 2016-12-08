@@ -9,13 +9,13 @@ import os.path
 import pandas as pd
 
 MIN_SAMPLES = 10000
-#ratio of samples to chars
+# ratio of samples to chars
 MIN_RATIO = 400
 MAX_RATIO = 2500
 
 df = pd.read_csv('out.csv')
 mat = df.as_matrix()
-df['ratio'] = mat[:,1]/mat[:,2]
+df['ratio'] = mat[:, 1]/mat[:, 2]
 
 print(df.describe())
 print(df.sort(['samples'], ascending=True))
@@ -38,6 +38,3 @@ for index, row in df.iterrows():
 
 with open('blacklist.json', 'w') as target_file:
     json.dump(blacklist_files, target_file)
-
-
-

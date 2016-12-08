@@ -222,9 +222,9 @@ class TestNet(tf.test.TestCase):
                 feed_dict = {audio_placeholder: audio,
                              gc_placeholder: speaker_ids}
             else:
-                feed_dict =  {audio_placeholder: audio,
-                              gc_placeholder: speaker_ids,
-                              lc_placeholder: local_conditions}
+                feed_dict = {audio_placeholder: audio,
+                             gc_placeholder: speaker_ids,
+                             lc_placeholder: local_conditions}
             return feed_dict, speaker_index, local_conditions
 
         np.random.seed(42)
@@ -264,9 +264,9 @@ class TestNet(tf.test.TestCase):
         initial_loss = None
         operations = [loss, optim]
         with self.test_session() as sess:
-            feed_dict, speaker_index, local_conditions = CreateTrainingFeedDict(
-                audio, speaker_ids, audio_placeholder, gc_placeholder, 0,
-                lc_placeholder)
+            feed_dict, speaker_index, local_conditions = \
+                CreateTrainingFeedDict(audio, speaker_ids, audio_placeholder,
+                                       gc_placeholder, 0, lc_placeholder)
             sess.run(init)
             initial_loss = sess.run(loss, feed_dict=feed_dict)
             for i in range(self.train_iters):
@@ -411,7 +411,7 @@ class TestNetWithGlobalConditioning(TestNet):
                                 global_condition_cardinality=NUM_SPEAKERS)
 
 
-#class TestNetWithLocalConditioning(TestNet):
+# class TestNetWithLocalConditioning(TestNet):
 #      def setUp(self):
 #          print('TestNetWithLocalConditioning setup.')
 #          sys.stdout.flush()

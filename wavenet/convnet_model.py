@@ -4,7 +4,8 @@ import tensorflow as tf
 CHARACTER_CARDINALITY = 256
 LAYER_COUNT = 5
 FILTER_WIDTH = 2
-UPSAMPLE_RATE = 1000 # Typical number of audio samples per
+UPSAMPLE_RATE = 1000  # Typical number of audio samples per
+
 
 def create_variable(name, shape):
     '''Create a convolution filter variable with the specified name and shape,
@@ -107,11 +108,11 @@ class ConvNetModel(object):
             # filter for tf.nn.conv2d_transpose, with height = 1 to achieve
             # a 1d deconv.
             variables['upsampling']['filter'] = create_variable(
-                'upsamp_filter', [1,
-                                  UPSAMPLE_RATE,
-                                  self.output_channels,
-                                  self.local_condition_channels]
-
+                'upsamp_filter',
+                [1,
+                 UPSAMPLE_RATE,
+                 self.output_channels,
+                 self.local_condition_channels])
         return var
 
     def _create_layer(input, layer_index):
@@ -139,9 +140,9 @@ class ConvNetModel(object):
         # The 1x1 conv to produce the residual output
         weights_dense = variables['dense']
         dense_bias = variables['dense_bias']
-        transformed = tf.nn.conv1d(
-                out, weights_dense, stride=1, padding="SAME", name="dense") +
-            dense_bias
+        transformed = tf.nn.conv1d(out, weights_dense, stride=1,
+                                   padding="SAME", name="dense")
+        transformed += dense_bias
 
         # The 1x1 conv to produce the skip output
         weights_skip = variables['skip']
@@ -163,9 +164,9 @@ class ConvNetModel(object):
 
     def _create_network(self, input_batch):
         with tf.name_scope('layer_stack'):
-            # Put 16 NULL entries on either side of the input time series.
-            pad_amount =
-            input_batch = tf.pad(input_batch, [[0,0], [32,32]])
+            # Put 32 NULL entries on either side of the input time
+            # series (dimension 1), and 0 padding before and after on dim 0.
+            input_batch = tf.pad(input_batch, [[0, 0], [32, 32]])
 
             current_layer = input_batch
             for i in range(LAYER_COUNT):
@@ -189,12 +190,19 @@ class ConvNetModel(object):
         with tf.name_scope('upsampling'):
             # Reshape so we can use 2d conv on it: height = 1
             input_shape = tf.shape(conv2)
-            conv2 = tf.reshape(input_shape[0], 1, input_shape[1], input_shape[2])
+            conv2 = tf.reshape(input_shape[0], 1, input_shape[1],
+                               input_shape[2])
 
-            upsampled_shape = [input_shape[0], 1, input_shape[1]*UPSAMPLE_RATE, input_shape[2]]
+            upsampled_shape = [input_shape[0], 1, input_shape[1]*UPSAMPLE_RATE,
+                               input_shape[2]]
             filt = self.variables['upsampling']['filter']
             # 2d transpose conv with height = 1, width = characters.
-            upsampled = tf.nn.conv2d_transpose(upsampled, filt, upsampled_shape, [1,UPSAMPLE_RATE] padding='VALID', name='upsampled')
+            upsampled = tf.nn.conv2d_transpose(upsampled,
+                                               filt,
+                                               upsampled_shape,
+                                               [1, UPSAMPLE_RATE],
+                                               padding='VALID',
+                                               name='upsampled')
             # Remove the dummy "height=1" dimension we added for the 2d conv,
             # to bring it back to batch x duration x channels.
             upsampled = tf.reshape(upsampled, [input_shape[0],
@@ -206,10 +214,3 @@ class ConvNetModel(object):
         with tf.name_scope('text_conv_net'):
             upsampled = self._create_net(input_text)
         return upsampled
-
-
-
-
-
-
-

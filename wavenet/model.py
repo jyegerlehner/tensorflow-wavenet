@@ -116,13 +116,11 @@ class WaveNetModel(object):
         self.ctc_loss = ctc_loss
         if self.ctc_loss:
             # CTC loss requires a category for "blank" value.
-            self.softmax_channels =  self.quantization_channels + 1
+            self.softmax_channels = self.quantization_channels + 1
         else:
             self.softmax_channels = self.quantization_channels
 
-
         self.variables = self._create_variables()
-
 
     def _create_variables(self):
         '''This function creates all variables used by the network.
@@ -198,15 +196,15 @@ class WaveNetModel(object):
                                 [1, self.global_condition_channels,
                                  self.dilation_channels])
 
-                       if self.local_condition_channels is not None:
-                           current['lc_gateweights'] = create_variable(
-                               'lc_gate',
-                               [1, self.local_condition_channels,
-                                self.dilation_channels])
-                           current['lc_filtweights'] = create_variable(
-                               'lc_filter',
-                               [1, self.local_condition_channels,
-                                self.dilation_channels])
+                        if self.local_condition_channels is not None:
+                            current['lc_gateweights'] = create_variable(
+                                'lc_gate',
+                                [1, self.local_condition_channels,
+                                    self.dilation_channels])
+                            current['lc_filtweights'] = create_variable(
+                                'lc_filter',
+                                [1, self.local_condition_channels,
+                                    self.dilation_channels])
 
                         if self.use_biases:
                             current['filter_bias'] = create_bias_variable(
@@ -405,7 +403,8 @@ class WaveNetModel(object):
         return skip_contribution, input_batch + transformed
 
     def _create_network(self, input_batch, global_condition_batch,
-                        local_condition_batch):
+                        local_condition_batch=None):
+
         '''Construct the WaveNet network.'''
         outputs = []
         current_layer = input_batch
@@ -574,7 +573,8 @@ class WaveNetModel(object):
 
         return embedding
 
-    def predict_proba(self, waveform, global_condition=None, name='wavenet'):
+    def predict_proba(self, waveform, global_condition=None, name='wavenet',
+                      local_condition=None):
         '''Computes the probability distribution of the next sample based on
         all samples in the input waveform.
         If you want to generate audio by feeding the output of the network back
@@ -587,7 +587,8 @@ class WaveNetModel(object):
                 encoded = self._one_hot(waveform)
 
             gc_embedding = self._embed_gc(global_condition)
-            raw_output = self._create_network(encoded, gc_embedding)
+            raw_output = self._create_network(encoded, gc_embedding,
+                                              local_condition)
             out = tf.reshape(raw_output, [-1, self.softmax_channels])
             # Cast to float64 to avoid bug in TensorFlow
             proba = tf.cast(
@@ -644,7 +645,7 @@ class WaveNetModel(object):
         with tf.name_scope(name):
             # We mu-law encode and quantize the input audioform.
             discretized_input = mu_law_encode(input_batch,
-                                          self.quantization_channels)
+                                              self.quantization_channels)
 
             gc_embedding = self._embed_gc(global_condition_batch)
 
@@ -667,11 +668,9 @@ class WaveNetModel(object):
                     shifted = shift_on_sample(discretized_input)
                     loss = tf.nn.ctc_loss(
                         inputs=raw_output,
-                        labels=tf.reshape(shifted, [-1,1]),
-
-                        sequence_length = tf.fill([tf.shape(inputs)[0]],
-                                                   tf.shape(inputs)[1])
-
+                        labels=tf.reshape(shifted, [-1, 1]),
+                        sequence_length=tf.fill(tf.shape(inputs)[0],
+                                                tf.shape(inputs)[1]),
                         preprocess_collapse_repeated=False,
                         ctc_merge_repeated=False,
                         time_major=False)

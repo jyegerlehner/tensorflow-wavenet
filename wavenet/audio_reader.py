@@ -65,11 +65,8 @@ def load_generic_audio(directory, sample_rate, blacklist):
     '''Generator that yields audio waveforms from the directory.'''
     audio_dict, text_dict = find_audio_and_text(directory)
 
-    blacklist=blacklist
-
     id_reg_exp = re.compile(FILE_PATTERN)
     print("files length: {}".format(len(files)))
-    #randomized_files = randomize_files(files)
     for base_name in random_files(audio_dict.keys()):
         not_in_blacklist = blacklist is None or base_name not in blacklist
         also_in_text_dict = base_name in text_dict
@@ -93,7 +90,7 @@ def load_generic_audio(directory, sample_rate, blacklist):
                 # Make it lower case, since the VCTK corpus is quite small
                 # and we won't see enough instances of upper case.
                 text = text_file.read().lower()
-                character_list = [ ord(achar) for char in text]
+                character_list = [ord(achar) for char in text]
 
             yield audio, filename, category_id, character_list
 
@@ -221,11 +218,10 @@ class AudioReader(object):
             self.coord.request_stop()
             self.coord.join(threads)
 
-
     def start_threads(self, sess, n_threads=1):
         for _ in range(n_threads):
             thread = threading.Thread(target=self.thread_main, args=(sess,))
-            #thread.daemon = True  # Thread will close when parent quits.
+            # thread.daemon = True  # Thread will close when parent quits.
             thread.start()
             self.threads.append(thread)
         return self.threads

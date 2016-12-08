@@ -15,6 +15,7 @@ SAMPLE_RATE = 16000
 ''' Computes the number of samples and the number of text characters
     corresponding to each audio sample in the corpus.'''
 
+
 def get_arguments():
     parser = argparse.ArgumentParser(description='Strip silence from audio')
     parser.add_argument('--corpus_dir', type=str, default=CORPUS_DIR,
@@ -22,6 +23,7 @@ def get_arguments():
     parser.add_argument('--sample_rate', type=int, default=SAMPLE_RATE,
                         help='Sample rate.')
     return parser.parse_args()
+
 
 def find_files(source_directory, pattern='*.wav'):
     '''Recursively finds all files matching the pattern.'''
@@ -40,6 +42,7 @@ def find_files(source_directory, pattern='*.wav'):
 
     return wave_files, text_files
 
+
 def trim_silence(audio, threshold):
     '''Removes silence at the beginning and end of a sample.'''
     energy = librosa.feature.rmse(audio)
@@ -48,6 +51,7 @@ def trim_silence(audio, threshold):
 
     # Note: indices can be an empty array, if the whole audio was silence.
     return audio[indices[0]:indices[-1]] if indices.size else audio[0:0]
+
 
 def main():
     args = get_arguments()
@@ -62,17 +66,16 @@ def main():
                                     mono=True)
             if file_base in text_files:
                 text = open(text_files[file_base], 'r').read()
-                print("file:{}, samples:{}, chars:{}".format(file_base, len(audio),
+                print("file:{}, samples:{}, chars:{}".format(file_base,
+                                                             len(audio),
                                                              len(text)))
-                logfile.write('{},{},{}\n'.format(file_base, len(audio), len(text)))
+                logfile.write('{},{},{}\n'.format(file_base, len(audio),
+                                                  len(text)))
             else:
                 print("file:{} is missing text file.".format(file_base))
 
     logfile.close()
 
 
-
-
 if __name__ == '__main__':
     main()
-

@@ -14,6 +14,7 @@ SOURCE_DIR = '/media/mass1/audio_data/VCTK-Corpus-stripped/txt'
 TARGET_DIR = '/media/mass1/audio_data/VCTK-Corpus-stripped/txt_scrubbed'
 SAMPLE_RATE = 16000
 
+
 def get_arguments():
     parser = argparse.ArgumentParser(description='Scrub the text of the'
                                      'corpus.')
@@ -24,6 +25,7 @@ def get_arguments():
     parser.add_argument('--sample_rate', type=int, default=SAMPLE_RATE,
                         help='Sample rate.')
     return parser.parse_args()
+
 
 def find_files(source_directory, target_directory):
     '''Recursively finds all text files.'''
@@ -36,7 +38,7 @@ def find_files(source_directory, target_directory):
             source_files[base] = source_file
 
             relpath = os.path.relpath(path=source_file, start=source_directory)
-            this_target = os.path.join(target_directory,relpath)
+            this_target = os.path.join(target_directory, relpath)
             target_files[base] = this_target
 
     return source_files, target_files
@@ -74,7 +76,7 @@ def main():
         if not os.path.exists(os.path.dirname(target_filename)):
             try:
                 os.makedirs(os.path.dirname(target_filename))
-            except OSError as exc: # Guard against race condition
+            except OSError as exc:  # Guard against race condition
                 if exc.errno != errno.EEXIST:
                     raise
 
