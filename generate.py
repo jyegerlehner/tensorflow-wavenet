@@ -251,6 +251,10 @@ def main():
         if (args.wav_out_path and args.save_every and
                 (step + 1) % args.save_every == 0):
             out = sess.run(decode, feed_dict={samples: waveform})
+            # Keep only the non-blank generated samples.
+            # The blank entries are the ones with value > 1.0
+            non_blank = out <= 1.0
+            out = out[non_blank]
             write_wav(out, wavenet_params['sample_rate'], args.wav_out_path)
 
     # Introduce a newline to clear the carriage return from the progress.

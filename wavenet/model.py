@@ -113,7 +113,7 @@ class WaveNetModel(object):
         self.global_condition_channels = global_condition_channels
         self.global_condition_cardinality = global_condition_cardinality
         self.local_condition_channels = local_condition_channels
-        self.ctc_loss
+        self.ctc_loss = ctc_loss
         if self.ctc_loss:
             # CTC loss requires a category for "blank" value.
             self.softmax_channels =  self.quantization_channels + 1

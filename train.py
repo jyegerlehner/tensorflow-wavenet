@@ -280,7 +280,7 @@ def main():
 #                    local_condition_batch=local_condition,
 #                    l2_regularization_strength=args.l2_regularization_strength)
 
-    loss = net.ctc_loss(input_batch=audio_batch,
+    loss = net.loss(input_batch=audio_batch,
                         global_condition_batch=gc_id_batch,
                         local_condition_batch=local_condition,
                         l2_regularization_strength=
