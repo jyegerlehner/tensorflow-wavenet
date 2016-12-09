@@ -233,7 +233,7 @@ class WaveNetModel(object):
                         [self.skip_channels])
                     current['postprocess2_bias'] = create_bias_variable(
                         'postprocess2_bias',
-                        [self.softmax_channels])
+                        [self.skip_channels])
                 var['postprocessing'] = current
 
         return var
@@ -587,12 +587,14 @@ class WaveNetModel(object):
                 encoded = self._one_hot(waveform)
 
             gc_embedding = self._embed_gc(global_condition)
+
             raw_output = self._create_network(encoded, gc_embedding,
                                               local_condition)
             out = tf.reshape(raw_output, [-1, self.softmax_channels])
             # Cast to float64 to avoid bug in TensorFlow
-            proba = tf.cast(
-                tf.nn.softmax(tf.cast(out, tf.float64)), tf.float32)
+#            proba = tf.cast(
+#                tf.nn.softmax(tf.cast(out, tf.float64)), tf.float32)
+            proba = tf.nn.softmax(out)
             last = tf.slice(
                 proba,
                 [tf.shape(proba)[0] - 1, 0],
@@ -624,7 +626,7 @@ class WaveNetModel(object):
                 [1, self.softmax_channels])
             return tf.reshape(last, [-1])
 
-    def _shift_one_sample(waveform):
+    def _shift_one_sample(self, waveform):
         # Shift original input left by one sample, which means that
         # each output sample has to predict the next input sample.
         shifted = tf.slice(waveform, [0, 1, 0],
@@ -643,11 +645,12 @@ class WaveNetModel(object):
         The variables are all scoped to the given name.
         '''
         with tf.name_scope(name):
+            gc_embedding = self._embed_gc(global_condition_batch)
+
             # We mu-law encode and quantize the input audioform.
             discretized_input = mu_law_encode(input_batch,
                                               self.quantization_channels)
 
-            gc_embedding = self._embed_gc(global_condition_batch)
 
             encoded = self._one_hot(discretized_input)
             if self.scalar_input:
@@ -665,7 +668,7 @@ class WaveNetModel(object):
                                         [-1, self.softmax_channels])
 
                 if self.ctc_loss:
-                    shifted = shift_on_sample(discretized_input)
+                    shifted = shift_one_sample(encoded)
                     loss = tf.nn.ctc_loss(
                         inputs=raw_output,
                         labels=tf.reshape(shifted, [-1, 1]),
@@ -676,7 +679,7 @@ class WaveNetModel(object):
                         time_major=False)
 
                 else:
-                    shifted = _shift_one_sample(encoded)
+                    shifted = self._shift_one_sample(encoded)
                     loss = tf.nn.softmax_cross_entropy_with_logits(
                         prediction,
                         tf.reshape(shifted, [-1, self.softmax_channels]))
