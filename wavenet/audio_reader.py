@@ -26,28 +26,33 @@ def get_category_cardinality(files):
     return min_id, max_id
 
 
-def randomize_files(files):
-    for file in files:
-        file_index = random.randint(0, (len(files) - 1))
-        yield files[file_index]
+def random_file(base_names):
+    for _ in base_names:
+        file_index = random.randint(0, (len(base_names) - 1))
+        yield base_names[file_index]
 
 
-def find_files(directory, pattern='*.wav'):
+def find_files(directory, pattern='*.wav', blacklist=None):
     '''Recursively finds all files matching the pattern.'''
     files = []
     for root, dirnames, filenames in os.walk(directory):
         for filename in fnmatch.filter(filenames, pattern):
-            files.append(os.path.join(root, filename))
+            base, ext = os.path.splitext(filename)
+            if blacklist is None or base not in blacklist:
+                files.append(os.path.join(root, filename))
     return files
 
 
 def matches_test_pattern(test_reg_exp, filename):
     return test_reg_exp.match(filename) is not None
 
+def find_audio_and_text(corpus_directory,
+                        is_train_not_test,
+                        test_pattern, pattern='*.wav'):
+    '''Recursively finds all files matching the pattern.'''
+    wave_files = dict()
+    text_files = dict()
 
-def load_generic_audio(directory, sample_rate, test_pattern,
-                       is_train_not_test):
-    '''Generator that yields audio waveforms from the directory.'''
     files = find_files(directory)
     # Files that match the test pattern are used in testing, all other
     # files are used in training.
@@ -58,21 +63,60 @@ def load_generic_audio(directory, sample_rate, test_pattern,
             new_files.append(file)
     files = new_files
 
-    id_reg_exp = re.compile(FILE_PATTERN)
-    randomized_files = randomize_files(files)
 
-    for filename in randomized_files:
-        ids = id_reg_exp.findall(filename)
-        if ids is None:
-            # The file name does not match the pattern containing ids, so
-            # there is no id.
-            category_id = None
-        else:
-            # The file name matches the pattern for containing ids.
-            category_id = int(ids[0][0])
-        audio, _ = librosa.load(filename, sr=sample_rate, mono=True)
-        audio = audio.reshape(-1, 1)
-        yield audio, filename, category_id
+    for root, dirnames, filenames in os.walk(corpus_directory):
+        for filename in fnmatch.filter(filenames, pattern):
+            wav_file = os.path.join(root, filename)
+            (base, _) = os.path.splitext(filename)
+            wave_files[base] = wav_file
+
+        for filename in fnmatch.filter(filenames, "*.txt"):
+            txt_file = os.path.join(root, filename)
+            (base, _) = os.path.splitext(filename)
+            text_files[base] = txt_file
+
+    return wave_files, text_files
+
+
+def load_generic_audio(directory,
+                       sample_rate,
+                       test_pattern,
+                       is_train_not_test,
+                       blacklist):
+    '''Generator that yields audio waveforms from the directory.'''
+    audio_dict, text_dict = find_audio_and_text(directory,
+                                                is_train_not_test,
+                                                test_pattern=test_pattern,
+                                                pattern=FILE_PATTERN)
+
+    id_reg_exp = re.compile(test_pattern)
+    print("files length: {}".format(len(files)))
+    for base_name in random_files(audio_dict.keys()):
+        not_in_blacklist = blacklist is None or base_name not in blacklist
+        also_in_text_dict = base_name in text_dict
+        if not_in_blacklist and also_in_text_dict:
+            ids = id_reg_exp.findall(filename)
+            if ids is None:
+                # The file name does not match the pattern containing ids, so
+                # there is no id.
+                category_id = None
+            else:
+                # The file name matches the pattern for containing ids.
+                category_id = int(ids[0][0])
+            # load the audio.
+            filename = audio_dict[base_name]
+            audio, _ = librosa.load(filename, sr=sample_rate, mono=True)
+            audio = audio.reshape(-1, 1)
+
+            # load the text
+            filename = text_dict[base_name]
+            with open(filename, 'r') as text_file:
+                # Make it lower case, since the VCTK corpus is quite small
+                # and we won't see enough instances of upper case.
+                text = text_file.read().lower()
+                character_list = [ord(achar) for char in text]
+
+            yield audio, filename, category_id, character_list
 
 
 def trim_silence(audio, threshold):
@@ -108,8 +152,9 @@ class AudioReader(object):
                  sample_size,
                  test_pattern=None,
                  silence_threshold=None,
-                 queue_size=64):
-        self.audio_dir = audio_dir
+                 queue_size=64,
+                 blacklist=None):
+        self.corpus_dir = audio_dir
         self.sample_rate = sample_rate
         self.coord = coord
         self.sample_size = sample_size
@@ -118,10 +163,13 @@ class AudioReader(object):
         self.threads = []
         self.test_pattern = test_pattern
         self.sample_placeholder = tf.placeholder(dtype=tf.float32, shape=None)
+        self.text_placeholder = tf.placeholder(dtype=tf.int32, shape=None)
         self.queue = tf.PaddingFIFOQueue(queue_size,
-                                         ['float32'],
-                                         shapes=[(None, 1)])
-        self.enqueue = self.queue.enqueue([self.sample_placeholder])
+                                         ['float32', 'int32'],
+                                         shapes=[(None, 1), (None, 1)])
+        self.enqueue = self.queue.enqueue([self.sample_placeholder,
+                                          self.text_placeholder])
+        self.blacklist = blacklist
         self.do_test = len(test_pattern) > 0 if test_pattern \
                                                 is not None else False
         if self.do_test:
@@ -150,7 +198,7 @@ class AudioReader(object):
         # TODO Find a better way to check this.
         # Checking inside the AudioReader's thread makes it hard to terminate
         # the execution of the script, so we do it in the constructor for now.
-        files = find_files(audio_dir)
+        files = find_files(audio_dir, blacklist=blacklist)
         if not files:
             raise ValueError("No audio files found in '{}'.".format(audio_dir))
         if self.gc_enabled and not_all_have_id(files):
@@ -174,8 +222,8 @@ class AudioReader(object):
             self.gc_category_cardinality = None
 
     def dequeue(self, num_elements):
-        output = self.queue.dequeue_many(num_elements)
-        return output
+        audio, text = self.queue.dequeue_many(num_elements)
+        return audio, text
 
     def dequeue_gc(self, num_elements):
         return self.gc_queue.dequeue_many(num_elements)
@@ -206,34 +254,49 @@ class AudioReader(object):
                 gc_enqueue_op = self.test_gc_enqueue
                 id_placeholder = self.test_id_placeholder
 
-        # Go through the dataset multiple times
-        while not stop:
-            iterator = load_generic_audio(self.audio_dir, self.sample_rate,
-                                          self.test_pattern, is_train_not_test)
-            for audio, filename, category_id in iterator:
-                if self.coord.should_stop():
-                    stop = True
-                    break
-                if self.silence_threshold is not None:
-                    # Remove silence
-                    audio = trim_silence(audio[:, 0], self.silence_threshold)
-                    audio = audio.reshape(-1, 1)
-                    if audio.size == 0:
-                        print("Warning: {} was ignored as it contains only "
-                              "silence. Consider decreasing trim_silence "
-                              "threshold, or adjust volume of the audio."
-                              .format(filename))
+        try:
+            # Go through the dataset multiple times
+            while not stop:
+                iterator = load_generic_audio(self.audio_dir,
+                                              self.sample_rate,
+                                              self.test_pattern,
+                                              is_train_not_test,
+                                              self.black_list)
+                for audio, filename, category_id, char_list in iterator:
+                    if self.coord.should_stop():
+                        stop = True
+                        break
+                    if self.silence_threshold is not None:
+                        # Remove silence
+                        audio = trim_silence(audio[:, 0], self.silence_threshold)
+                        audio = audio.reshape(-1, 1)
+                        if audio.size == 0:
+                            print("Warning: {} was ignored as it contains only "
+                                  "silence. Consider decreasing trim_silence "
+                                  "threshold, or adjust volume of the audio."
+                                  .format(filename))
 
-                # Cut samples into fixed size pieces
-                buffer_ = np.append(buffer_, audio)
-                while len(buffer_) > 0:
-                    piece = np.reshape(buffer_[:self.sample_size], [-1, 1])
-                    sess.run(enqueue_op,
-                             feed_dict={sample_placeholder: piece})
-                    buffer_ = buffer_[self.sample_size:]
-                    if self.gc_enabled:
-                        sess.run(gc_enqueue_op,
-                                 feed_dict={id_placeholder: category_id})
+                    # Cut samples into fixed size pieces
+                    buffer_ = np.append(buffer_, audio)
+                    while len(buffer_) > 0:
+                        piece = np.reshape(buffer_[:self.sample_size], [-1, 1])
+                        sess.run(self.enqueue,
+                                 feed_dict={self.sample_placeholder: piece,
+                                            self.text_placeholder: char_list})
+                        buffer_ = buffer_[self.sample_size:]
+                        if self.gc_enabled:
+                            sess.run(self.gc_enqueue,
+                                     feed_dict={self.id_placeholder:
+                                                category_id})
+
+        except Exception, e:
+            # Report exceptions to the coordinator.
+            self.coord.request_stop(e)
+        finally:
+            # Terminate as usual.  It is innocuous to request stop twice.
+            self.coord.request_stop()
+            self.coord.join(threads)
+
 
     def _start_thread(self, sess, is_train_not_test):
         thread = threading.Thread(target=self.thread_main,
@@ -244,9 +307,9 @@ class AudioReader(object):
 
     def start_threads(self, sess, n_threads=1):
         for _ in range(n_threads):
-            self._start_thread(sess, True)
+            self._start_thread(sess, is_train_not_test=True)
             if self.do_test:
-                self._start_thread(sess, False)
+                self._start_thread(sess, is_train_not_test=False)
         return self.threads
 
 

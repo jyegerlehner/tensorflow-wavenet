@@ -32,7 +32,10 @@ L2_REGULARIZATION_STRENGTH = 0
 SILENCE_THRESHOLD = 0.3
 EPSILON = 0.001
 MOMENTUM = 0.9
-
+BLACKLIST='./blacklist.json'
+ENCODER_CHANNELS = 48
+ENCODER_OUTPUT_CHANNELS = 512
+LOCAL_CONDITION_CHANNELS = 32
 
 def get_arguments():
     def _str_to_bool(s):
@@ -76,6 +79,9 @@ def get_arguments():
                         help='Learning rate for training.')
     parser.add_argument('--wavenet_params', type=str, default=WAVENET_PARAMS,
                         help='JSON file with the network parameters.')
+    parser.add_argument('--blacklist', type=str, default=BLACKLIST,
+                        help='JSON file containing set of file names to be '
+                             'ignored while training (sans file extension).')
     parser.add_argument('--sample_size', type=int, default=SAMPLE_SIZE,
                         help='Concatenate and cut audio samples to this many '
                         'samples.')
@@ -98,6 +104,17 @@ def get_arguments():
                          help='Whether to store histogram summaries.')
     parser.add_argument('--gc_channels', type=int, default=None,
                         help='Number of global condition channels.')
+    parser.add_argument('--encoder_channels', type=int,
+                        default=ENCODER_CHANNELS,
+                        help='Number of channels in the text encoder net.')
+    parser.add_argument('--encoder_output_channels', type=int,
+                        default=ENCODER_OUTPUT_CHANNELS,
+                        help='Number of output channels from the text encoder '
+                             'net.')
+    parser.add_argument('--lc_channels', type=int,
+                        default=LOCAL_CONDITION_CHANNELS,
+                        help='Number of channels in the upsampled local '
+                             'condition fed to the audio wavenet.')
     return parser.parse_args()
 
 
@@ -180,7 +197,7 @@ def validate_directories(args):
     }
 
 def get_input_batches(gc_enabled, test_interval, reader, batch_size):
-    audio_batch = reader.dequeue(batch_size)
+    audio_batch, text_batch = reader.dequeue(batch_size)
     gc_id_batch = None
     if gc_enabled:
         gc_id_batch = reader.dequeue_gc(batch_size)
@@ -188,10 +205,11 @@ def get_input_batches(gc_enabled, test_interval, reader, batch_size):
     test_audio_batch = None
     test_gc_id_batch = None
     if test_interval > 0:
-        test_audio_batch = reader.dequeue_test_audio(1)
+        test_audio_batch, text_text_batch = reader.dequeue_test_audio(1)
         if gc_enabled:
             test_gc_id_batch = reader.dequeue_test_gc_id(1)
-    return audio_batch, gc_id_batch, test_audio_batch, test_gc_id_batch
+    return (audio_batch, text_batch, gc_id_batch, test_audio_batch,
+            test_text_batch, test_gc_id_batch)
 
 def compute_test_loss(sess, test_steps, test_loss):
     accumulator = 0.0
@@ -203,7 +221,6 @@ def compute_test_loss(sess, test_steps, test_loss):
 
 def main():
     args = get_arguments()
-
     try:
         directories = validate_directories(args)
     except ValueError as e:
@@ -223,6 +240,8 @@ def main():
         wavenet_params = json.load(f)
 
     print("test_pattern:", wavenet_params["test_pattern"])
+    with open(args.blacklist, 'r') as f:
+        blacklist = set(json.load(f))
 
     # Create coordinator.
     coord = tf.train.Coordinator()
@@ -242,11 +261,21 @@ def main():
             gc_enabled=gc_enabled,
             sample_size=args.sample_size,
             test_pattern=wavenet_params['test_pattern'],
-            silence_threshold=args.silence_threshold)
+            silence_threshold=args.silence_threshold,
+            blacklist=blacklist)
 
-        audio_batch, gc_id_batch, test_audio_batch, test_gc_id_batch = \
+        (audio_batch, text_batch, gc_id_batch, test_audio_batch,
+         test_text_batch, test_gc_id_batch) = \
             get_input_batches(gc_enabled, test_interval, reader,
                               args.batch_size)
+
+    # Create text encoder network.
+    text_encoder = ConvNetModel(
+        batch_size=args.batch_size,
+        encoder_channels=args.encoder_channels,
+        histograms=args.histograms,
+        output_channels=args.encoder_output_channels,
+        local_condition_channels=args.lc_channels)
 
     # Create network.
     net = WaveNetModel(
@@ -263,17 +292,30 @@ def main():
         histograms=args.histograms,
         global_condition_channels=args.gc_channels,
         global_condition_cardinality=reader.gc_category_cardinality,
-        residual_postproc=wavenet_params["residual_postproc"])
+        local_condition_channels=args.lc_channels)
+
     if args.l2_regularization_strength == 0:
         args.l2_regularization_strength = None
+
+    lc_batch = text_encoder.upsample(text_batch)
+    test_lc_batch = text_encoder.upsample(test_text_batch)
+#    loss = net.loss(input_batch=audio_batch,
+#                    global_condition_batch=gc_id_batch,
+#                    local_condition_batch=local_condition,
+#                    l2_regularization_strength=args.l2_regularization_strength)
+
     loss = net.loss(input_batch=audio_batch,
                     global_condition_batch=gc_id_batch,
+                    local_condition_batch=lc_batch,
                     l2_regularization_strength=args.l2_regularization_strength)
+
     test_loss = net.loss(input_batch=test_audio_batch,
                          global_condition_batch=test_gc_id_batch,
+                         local_condition_batch=test_lc_batch,
                          l2_regularization_strength=
                             args.l2_regularization_strength,
                          loss_prefix='test_')
+
     optimizer = optimizer_factory[args.optimizer](
                     learning_rate=args.learning_rate,
                     momentum=args.momentum)
@@ -315,6 +357,8 @@ def main():
     try:
         last_saved_step = saved_global_step
         for step in range(saved_global_step + 1, args.num_steps):
+            if coord.should_stop():
+                break
             start_time = time.time()
             if args.store_metadata and step % 50 == 0:
                 # Slow run that stores extra information for debugging.
