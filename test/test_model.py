@@ -150,8 +150,8 @@ def check_waveform(assertion, generated_waveform, gc_category):
                freqs[index] <= 500.0]
     power_spectrum = power_spectrum[indices]
     freqs = freqs[indices]
-    plt.plot(freqs[indices], power_spectrum[indices])
-    plt.show()
+#    plt.plot(freqs[indices], power_spectrum[indices])
+#    plt.show()
     power_sum = np.sum(power_spectrum)
     f1_power = find_nearest(freqs, power_spectrum, F1)
     f2_power = find_nearest(freqs, power_spectrum, F2)
@@ -241,21 +241,21 @@ class TestNet(tf.test.TestCase):
         audio, speaker_ids, local_conditions = \
             make_sine_waves(self.global_conditioning)
 
-        if self.generate:
-            if len(audio.shape) == 2:
-                for i in range(audio.shape[0]):
-                    librosa.output.write_wav(
-                          '/tmp/sine_train{}.wav'.format(i), audio[i,:],
-                          SAMPLE_RATE_HZ)
-                    power_spectrum = np.abs(np.fft.fft(audio[i,:]))**2
-                    freqs = np.fft.fftfreq(audio[i,:].size,
-                                           SAMPLE_PERIOD_SECS)
-                    indices = np.argsort(freqs)
-                    indices = [index for index in indices if
-                                 freqs[index] >= 0 and
-                                 freqs[index] <= 500.0]
-                    plt.plot(freqs[indices], power_spectrum[indices])
-                    plt.show()
+#        if self.generate:
+#            if len(audio.shape) == 2:
+#                for i in range(audio.shape[0]):
+#                    librosa.output.write_wav(
+#                          '/tmp/sine_train{}.wav'.format(i), audio[i,:],
+#                          SAMPLE_RATE_HZ)
+#                    power_spectrum = np.abs(np.fft.fft(audio[i,:]))**2
+#                    freqs = np.fft.fftfreq(audio[i,:].size,
+#                                           SAMPLE_PERIOD_SECS)
+#                    indices = np.argsort(freqs)
+#                    indices = [index for index in indices if
+#                                 freqs[index] >= 0 and
+#                                 freqs[index] <= 500.0]
+#                    plt.plot(freqs[indices], power_spectrum[indices])
+#                    plt.show()
 
         audio_placeholder = tf.placeholder(dtype=tf.float32)
         gc_placeholder = tf.placeholder(dtype=tf.int32)  \
@@ -335,78 +335,78 @@ class TestNet(tf.test.TestCase):
                             self.assertGreater, generated_waveforms[0], None)
 
 
-#class TestNetWithBiases(TestNet):
+class TestNetWithBiases(TestNet):
 
-#    def setUp(self):
-#        print('TestNetWithBias setup.')
-#        sys.stdout.flush()
+    def setUp(self):
+        print('TestNetWithBias setup.')
+        sys.stdout.flush()
 
-#        self.local_conditioning = False
-#        self.net = WaveNetModel(batch_size=1,
-#                                dilations=[1, 2, 4, 8, 16, 32, 64,
-#                                           1, 2, 4, 8, 16, 32, 64],
-#                                filter_width=2,
-#                                residual_channels=32,
-#                                dilation_channels=32,
-#                                quantization_channels=QUANTIZATION_CHANNELS,
-#                                use_biases=True,
-#                                skip_channels=32)
-#        self.optimizer_type = 'sgd'
-#        self.learning_rate = 0.02
-#        self.generate = False
-#        self.momentum = MOMENTUM
-#        self.global_conditioning = False
-#        self.train_iters = TRAIN_ITERATIONS
-
-
-#class TestNetWithRMSProp(TestNet):
-
-#    def setUp(self):
-#        print('TestNetWithRMSProp setup.')
-#        sys.stdout.flush()
-
-#        self.local_conditioning = False
-#        self.net = WaveNetModel(batch_size=1,
-#                                dilations=[1, 2, 4, 8, 16, 32, 64,
-#                                           1, 2, 4, 8, 16, 32, 64],
-#                                filter_width=2,
-#                                residual_channels=32,
-#                                dilation_channels=32,
-#                                quantization_channels=QUANTIZATION_CHANNELS,
-#                                skip_channels=256,
-#                                use_biases=True)
-#        self.optimizer_type = 'rmsprop'
-#        self.learning_rate = 0.001
-#        self.generate = True
-#        self.momentum = MOMENTUM
-#        self.train_iters = TRAIN_ITERATIONS
-#        self.global_conditioning = False
+        self.local_conditioning = False
+        self.net = WaveNetModel(batch_size=1,
+                                dilations=[1, 2, 4, 8, 16, 32, 64,
+                                           1, 2, 4, 8, 16, 32, 64],
+                                filter_width=2,
+                                residual_channels=32,
+                                dilation_channels=32,
+                                quantization_channels=QUANTIZATION_CHANNELS,
+                                use_biases=True,
+                                skip_channels=32)
+        self.optimizer_type = 'sgd'
+        self.learning_rate = 0.02
+        self.generate = False
+        self.momentum = MOMENTUM
+        self.global_conditioning = False
+        self.train_iters = TRAIN_ITERATIONS
 
 
-#class TestNetWithScalarInput(TestNet):
+class TestNetWithRMSProp(TestNet):
 
-#    def setUp(self):
-#        print('TestNetWithScalarInput setup.')
-#        sys.stdout.flush()
+    def setUp(self):
+        print('TestNetWithRMSProp setup.')
+        sys.stdout.flush()
 
-#        self.local_conditioning = False
-#        self.net = WaveNetModel(batch_size=1,
-#                                dilations=[1, 2, 4, 8, 16, 32, 64,
-#                                           1, 2, 4, 8, 16, 32, 64],
-#                                filter_width=2,
-#                                residual_channels=32,
-#                                dilation_channels=32,
-#                                quantization_channels=QUANTIZATION_CHANNELS,
-#                                use_biases=True,
-#                                skip_channels=32,
-#                                scalar_input=True,
-#                                initial_filter_width=4)
-#        self.optimizer_type = 'sgd'
-#        self.learning_rate = 0.01
-#        self.generate = False
-#        self.momentum = MOMENTUM
-#        self.global_conditioning = False
-#        self.train_iters = 1200
+        self.local_conditioning = False
+        self.net = WaveNetModel(batch_size=1,
+                                dilations=[1, 2, 4, 8, 16, 32, 64,
+                                           1, 2, 4, 8, 16, 32, 64],
+                                filter_width=2,
+                                residual_channels=32,
+                                dilation_channels=32,
+                                quantization_channels=QUANTIZATION_CHANNELS,
+                                skip_channels=256,
+                                use_biases=True)
+        self.optimizer_type = 'rmsprop'
+        self.learning_rate = 0.001
+        self.generate = True
+        self.momentum = MOMENTUM
+        self.train_iters = TRAIN_ITERATIONS
+        self.global_conditioning = False
+
+
+class TestNetWithScalarInput(TestNet):
+
+    def setUp(self):
+        print('TestNetWithScalarInput setup.')
+        sys.stdout.flush()
+
+        self.local_conditioning = False
+        self.net = WaveNetModel(batch_size=1,
+                                dilations=[1, 2, 4, 8, 16, 32, 64,
+                                           1, 2, 4, 8, 16, 32, 64],
+                                filter_width=2,
+                                residual_channels=32,
+                                dilation_channels=32,
+                                quantization_channels=QUANTIZATION_CHANNELS,
+                                use_biases=True,
+                                skip_channels=32,
+                                scalar_input=True,
+                                initial_filter_width=4)
+        self.optimizer_type = 'sgd'
+        self.learning_rate = 0.01
+        self.generate = False
+        self.momentum = MOMENTUM
+        self.global_conditioning = False
+        self.train_iters = 1200
 
 
 class TestNetWithGlobalConditioning(TestNet):
@@ -434,7 +434,7 @@ class TestNetWithGlobalConditioning(TestNet):
                                 global_condition_cardinality=NUM_SPEAKERS)
 
 
-#class TestNetWithLocalConditioning(TestNet):
+# class TestNetWithLocalConditioning(TestNet):
 #    def setUp(self):
 #        print('TestNetWithLocalConditioning setup.')
 #        sys.stdout.flush()
@@ -458,7 +458,7 @@ class TestNetWithGlobalConditioning(TestNet):
 #                                local_condition_channels=32)
 
 
-#class TestNetWithGlobalConditioningWithScalarInput(TestNet):
+# class TestNetWithGlobalConditioningWithScalarInput(TestNet):
 #    def setUp(self):
 #        print('TestNetWithGlobalConditioningScalarInput setup.')
 #        sys.stdout.flush()

@@ -311,7 +311,7 @@ class WaveNetModel(object):
                                                  weights_lc_gate,
                                                  stride=1,
                                                  padding="SAME",
-                                                 name="gc_gate")
+                                                 name="lc_gate")
 
         if self.use_biases:
             filter_bias = variables['filter_bias']
@@ -662,7 +662,7 @@ class WaveNetModel(object):
         shifted = tf.slice(waveform, [0, 1, 0],
                            [-1, tf.shape(waveform)[1] - 1, -1])
         shifted = tf.pad(shifted, [[0, 0], [0, 1], [0, 0]])
-        return waveform
+        return shifted
 
     def loss(self,
              input_batch,

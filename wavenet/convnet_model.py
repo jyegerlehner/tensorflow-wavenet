@@ -55,64 +55,64 @@ class ConvNetModel(object):
                     'text_embedding',
                     [CHARACTER_CARDINALITY, self.encoder_channels])
                 var['embeddings'] = layer
-        var['layer_stack'] = []
-        with tf.variable_scope('layer_stack'):
-            for i in range(LAYER_COUNT):
-                with tf.variable_scope('layer{}'.format(i)):
-                    current = dict()
-                    current['filter'] = create_variable(
-                        'filter',
-                        [FILTER_WIDTH,
-                         self.encoder_channels,
-                         self.encoder_channels])
-                    current['gate'] = create_variable(
-                        'gate',
-                        [FILTER_WIDTH,
-                         self.encoder_channels,
-                         self.encoder_channels])
-                    current['dense'] = create_variable(
-                        'dense',
-                        [1,
-                         self.encoder_channels,
-                         self.encoder_channels])
-                    current['skip'] = create_variable(
-                        'skip',
-                        [1,
-                         self.encoder_channels,
-                         self.output_channels])
-                    current['filter_bias'] = create_bias_variable(
-                        'filter_bias',
-                        [self.encoder_channels])
-                    current['gate_bias'] = create_bias_variable(
-                        'gate_bias',
-                        [self.encoder_channels])
-                    current['dense_bias'] = create_bias_variable(
-                        'dense_bias',
-                        [self.encoder_channels])
+            var['layer_stack'] = []
+            with tf.variable_scope('layer_stack'):
+                for i in range(LAYER_COUNT):
+                    with tf.variable_scope('layer{}'.format(i)):
+                        current = dict()
+                        current['filter'] = create_variable(
+                            'filter',
+                            [FILTER_WIDTH,
+                             self.encoder_channels,
+                             self.encoder_channels])
+                        current['gate'] = create_variable(
+                            'gate',
+                            [FILTER_WIDTH,
+                             self.encoder_channels,
+                             self.encoder_channels])
+                        current['dense'] = create_variable(
+                            'dense',
+                            [1,
+                             self.encoder_channels,
+                             self.encoder_channels])
+                        current['skip'] = create_variable(
+                            'skip',
+                            [1,
+                             self.encoder_channels,
+                             self.output_channels])
+                        current['filter_bias'] = create_bias_variable(
+                            'filter_bias',
+                            [self.encoder_channels])
+                        current['gate_bias'] = create_bias_variable(
+                            'gate_bias',
+                            [self.encoder_channels])
+                        current['dense_bias'] = create_bias_variable(
+                            'dense_bias',
+                            [self.encoder_channels])
 
-        with tf.variable_scope('postprocessing'):
-            current = dict()
-            current['postprocess1'] = create_variable(
-                'postprocess1',
-                [1, self.output_channels, self.output_channels])
-            current['postprocess2'] = create_variable(
-                'postprocess2',
-                [1, self.output_channels, self.output_channels])
-            current['postprocess1_bias'] = create_bias_variable(
-                'postprocess1_bias', self.output_channels, value=-0.2)
-            current['postprocess2_bias'] = create_bias_variable(
-                'postprocess2_bias', self.coutput_channels, value=-0.2)
-            var['postprocessing'] = current
+            with tf.variable_scope('postprocessing'):
+                current = dict()
+                current['postprocess1'] = create_variable(
+                    'postprocess1',
+                    [1, self.output_channels, self.output_channels])
+                current['postprocess2'] = create_variable(
+                    'postprocess2',
+                    [1, self.output_channels, self.output_channels])
+                current['postprocess1_bias'] = create_bias_variable(
+                    'postprocess1_bias', self.output_channels, value=-0.2)
+                current['postprocess2_bias'] = create_bias_variable(
+                    'postprocess2_bias', self.coutput_channels, value=-0.2)
+                var['postprocessing'] = current
 
-        with tf.variable_scope('upsampling'):
-            # filter for tf.nn.conv2d_transpose, with height = 1 to achieve
-            # a 1d deconv.
-            variables['upsampling']['filter'] = create_variable(
-                'upsamp_filter',
-                [1,
-                 UPSAMPLE_RATE,
-                 self.output_channels,
-                 self.local_condition_channels])
+            with tf.variable_scope('upsampling'):
+                # filter for tf.nn.conv2d_transpose, with height = 1 to achieve
+                # a 1d deconv.
+                variables['upsampling']['filter'] = create_variable(
+                    'upsamp_filter',
+                    [1,
+                     UPSAMPLE_RATE,
+                     self.output_channels,
+                     self.local_condition_channels])
         return var
 
     def _create_layer(input, layer_index):

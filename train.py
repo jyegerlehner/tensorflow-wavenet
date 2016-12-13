@@ -205,7 +205,7 @@ def get_input_batches(gc_enabled, test_interval, reader, batch_size):
     test_audio_batch = None
     test_gc_id_batch = None
     if test_interval > 0:
-        test_audio_batch, text_text_batch = reader.dequeue_test_audio(1)
+        test_audio_batch, test_text_batch = reader.dequeue_test_audio(1)
         if gc_enabled:
             test_gc_id_batch = reader.dequeue_test_gc_id(1)
     return (audio_batch, text_batch, gc_id_batch, test_audio_batch,
