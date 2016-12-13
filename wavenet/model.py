@@ -24,7 +24,8 @@ def create_embedding_table(name, shape):
 def create_bias_variable(name, shape, initial_value=0.0):
     '''Create a bias variable with the specified name and shape and initialize
     it to zero.'''
-    initializer = tf.constant_initializer(value=initial_value, dtype=tf.float32)
+    initializer = tf.constant_initializer(value=initial_value,
+                                          dtype=tf.float32)
     return tf.Variable(initializer(shape=shape), name)
 
 
@@ -233,7 +234,7 @@ class WaveNetModel(object):
                         [self.skip_channels], -0.1)
                     current['postprocess2_bias'] = create_bias_variable(
                         'postprocess2_bias',
-                        [self.softmax_channels], -0.1)
+                        [self.skip_channels], -0.1)
                 var['postprocessing'] = current
 
         return var
@@ -463,8 +464,6 @@ class WaveNetModel(object):
             if self.use_biases:
                 conv1 += b2
             transformed2 = tf.nn.relu(conv1)
-            if self.residual_postproc:
-                transformed2 += total
             conv2 = tf.nn.conv1d(transformed2, w2, stride=1, padding="SAME")
 
         return conv2
@@ -611,9 +610,8 @@ class WaveNetModel(object):
                                               local_condition)
             out = tf.reshape(raw_output, [-1, self.softmax_channels])
             # Cast to float64 to avoid bug in TensorFlow
-#            proba = tf.cast(
-#                tf.nn.softmax(tf.cast(out, tf.float64)), tf.float32)
-            proba = tf.nn.softmax(out)
+            proba = tf.cast(
+                tf.nn.softmax(tf.cast(out, tf.float64)), tf.float32)
             last = tf.slice(
                 proba,
                 [tf.shape(proba)[0] - 1, 0],
@@ -683,7 +681,6 @@ class WaveNetModel(object):
             # We mu-law encode and quantize the input audioform.
             discretized_input = mu_law_encode(input_batch,
                                               self.quantization_channels)
-
 
             encoded = self._one_hot(discretized_input)
             if self.scalar_input:

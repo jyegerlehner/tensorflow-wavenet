@@ -46,6 +46,7 @@ def find_files(directory, pattern='*.wav', blacklist=None):
 def matches_test_pattern(test_reg_exp, filename):
     return test_reg_exp.match(filename) is not None
 
+
 def find_audio_and_text(corpus_directory,
                         is_train_not_test,
                         test_pattern, pattern='*.wav'):
@@ -62,7 +63,6 @@ def find_audio_and_text(corpus_directory,
         if matches_test_pattern(test_reg_exp, file) != is_train_not_test:
             new_files.append(file)
     files = new_files
-
 
     for root, dirnames, filenames in os.walk(corpus_directory):
         for filename in fnmatch.filter(filenames, pattern):
@@ -170,17 +170,16 @@ class AudioReader(object):
         self.enqueue = self.queue.enqueue([self.sample_placeholder,
                                           self.text_placeholder])
         self.blacklist = blacklist
-        self.do_test = len(test_pattern) > 0 if test_pattern \
-                                                is not None else False
+        self.do_test = len(test_pattern) > 0 if test_pattern is not None \
+            else False
         if self.do_test:
             self.test_sample_placeholder = tf.placeholder(dtype=tf.float32,
                                                           shape=None)
             self.test_queue = tf.PaddingFIFOQueue(queue_size,
                                                   ['float32'],
-                                                  shapes=[(None,1)])
+                                                  shapes=[(None, 1)])
             self.test_enqueue = self.test_queue.enqueue(
                 [self.test_sample_placeholder])
-
 
         if self.gc_enabled:
             self.id_placeholder = tf.placeholder(dtype=tf.int32, shape=())
@@ -190,8 +189,9 @@ class AudioReader(object):
             if self.do_test:
                 self.test_id_placeholder = tf.placeholder(dtype=tf.int32,
                                                           shape=())
-                self.test_gc_queue = tf.PaddingFIFOQueue(queue_size, ['int32'],
-                                                    shapes=[()])
+                self.test_gc_queue = tf.PaddingFIFOQueue(queue_size,
+                                                         ['int32'],
+                                                         shapes=[()])
                 self.test_gc_enqueue = self.test_gc_queue.enqueue(
                     [self.test_id_placeholder])
 
@@ -268,11 +268,12 @@ class AudioReader(object):
                         break
                     if self.silence_threshold is not None:
                         # Remove silence
-                        audio = trim_silence(audio[:, 0], self.silence_threshold)
+                        audio = trim_silence(audio[:, 0],
+                                             self.silence_threshold)
                         audio = audio.reshape(-1, 1)
                         if audio.size == 0:
-                            print("Warning: {} was ignored as it contains only "
-                                  "silence. Consider decreasing trim_silence "
+                            print("Warning: {} was ignored as it contains only"
+                                  " silence. Consider decreasing trim_silence "
                                   "threshold, or adjust volume of the audio."
                                   .format(filename))
 
@@ -297,7 +298,6 @@ class AudioReader(object):
             self.coord.request_stop()
             self.coord.join(threads)
 
-
     def _start_thread(self, sess, is_train_not_test):
         thread = threading.Thread(target=self.thread_main,
                                   args=(sess, is_train_not_test,))
@@ -311,5 +311,3 @@ class AudioReader(object):
             if self.do_test:
                 self._start_thread(sess, is_train_not_test=False)
         return self.threads
-
-
