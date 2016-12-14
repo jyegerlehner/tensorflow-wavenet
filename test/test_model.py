@@ -62,7 +62,6 @@ def generate_waveform(sess, net, fast_generation, gc, samples_placeholder,
                       gc_placeholder, operations):
     waveform = [128]
     results = []
-    printed = False
     for i in range(GENERATE_SAMPLES):
         if i % 100 == 0:
             print("Generating {} of {}.".format(i, GENERATE_SAMPLES))
@@ -82,11 +81,6 @@ def generate_waveform(sess, net, fast_generation, gc, samples_placeholder,
             feed_dict[gc_placeholder] = gc
         results = sess.run(operations, feed_dict=feed_dict)
 
-        if not printed:
-            print("probs shape:{}".format(results[0].shape))
-            print("probs sum:{}".format(np.sum(results[0])))
-            print("probs:{}".format(results[0]))
-            printed = True
         sample = np.random.choice(
            np.arange(results[0].shape[0]), p=results[0])
         waveform.append(sample)
@@ -303,11 +297,8 @@ class TestNet(tf.test.TestCase):
             self.assertLess(loss_val / initial_loss, 0.02)
 
             if self.generate:
-                print("saving test.ckpt")
-                self._save_net(sess)
                 if self.global_conditioning:
                     # Check non-fast-generated waveform.
-                    self._load_net(sess)
                     generated_waveforms, ids = generate_waveforms(
                         sess, self.net, False, speaker_ids)
                     for (waveform, id) in zip(generated_waveforms, ids):
@@ -327,12 +318,11 @@ class TestNet(tf.test.TestCase):
                         sess, self.net, False, None)
                     check_waveform(
                         self.assertGreater, generated_waveforms[0], None)
-                    if not self.net.scalar_input:
-                        # Check incremental generation
-                        generated_waveform = generate_waveforms(
-                            sess, self.net, True, None)
-                        check_waveform(
-                            self.assertGreater, generated_waveforms[0], None)
+#                    # Check incremental generation
+#                    generated_waveform = generate_waveforms(
+#                        sess, self.net, True, None)
+#                    check_waveform(
+#                        self.assertGreater, generated_waveforms[0], None)
 
 
 class TestNetWithBiases(TestNet):

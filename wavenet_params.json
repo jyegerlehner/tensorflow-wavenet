@@ -12,10 +12,7 @@
     "quantization_channels": 256,
     "skip_channels": 1536,
     "use_biases": true,
-    "scalar_input": true,
-    "initial_filter_width": 2,
     "test_pattern": "^\\S+p([0-9]+)_(387|370)\\.wav",
     "test_interval": 100,
     "test_steps": 100,
-    "residual_postproc": false
 }
