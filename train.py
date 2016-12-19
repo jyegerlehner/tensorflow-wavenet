@@ -36,6 +36,8 @@ BLACKLIST='./blacklist.json'
 ENCODER_CHANNELS = 48
 ENCODER_OUTPUT_CHANNELS = 512
 LOCAL_CONDITION_CHANNELS = 32
+UPSAMPLE_RATE = 1000  # Typical number of audio samples per
+
 
 def get_arguments():
     def _str_to_bool(s):
@@ -275,7 +277,8 @@ def main():
         encoder_channels=args.encoder_channels,
         histograms=args.histograms,
         output_channels=args.encoder_output_channels,
-        local_condition_channels=args.lc_channels)
+        local_condition_channels=args.lc_channels,
+        up_sample_rate=UPSAMPLE_RATE)
 
     # Create network.
     net = WaveNetModel(

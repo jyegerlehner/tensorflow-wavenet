@@ -181,9 +181,8 @@ def main():
     print('Restoring model from {}'.format(args.checkpoint))
     saver.restore(sess, args.checkpoint)
 
-    decode = mu_law_decode(samples, wavenet_params['quantization_channels'])
-
     quantization_channels = wavenet_params['quantization_channels']
+    decode = mu_law_decode(samples, quantization_channels)
     if args.wav_seed:
         seed = create_seed(args.wav_seed,
                            wavenet_params['sample_rate'],

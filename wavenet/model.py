@@ -536,6 +536,8 @@ class WaveNetModel(object):
                 input_batch,
                 depth=self.softmax_channels,
                 dtype=tf.float32)
+            print("batch_size:{}, softmax_channels:{}".format(self.batch_size,
+                  self.softmax_channels))
             encoded = tf.reshape(encoded,
                                  [self.batch_size, -1, self.softmax_channels])
             return encoded
@@ -637,6 +639,31 @@ class WaveNetModel(object):
         shifted = tf.pad(shifted, [[0, 0], [0, 1], [0, 0]])
         return shifted
 
+    def receptive_field(self):
+        max_dilation = max(self.dilations)
+        num_stacks = self.dilations.count(max_dilation)
+        size = max_dilation*2 + (num_stacks-1)*(max_dilation*2-1)
+        return size
+
+    def _to_sparse(self, val):
+        indices = tf.where(tf.greater(val, -1))
+        return tf.SparseTensor(indices=indices,
+                               values=tf.gather_nd(val, indices),
+                               shape=tf.cast(tf.shape(val), dtype=tf.int64))
+
+    def _extend_to_match(self, target_shape, source):
+        source_shape = tf.shape(source)
+        source_length = source_shape[1]
+        prelude_length = (target_shape[1] - source_length) / 2
+        postlude_length = target_shape[1] - prelude_length - source_length
+        prelude_shape = source_shape
+        prelude_shape = [source_shape[0], prelude_length, source_shape[2]]
+        postlude_shape = source_shape
+        postlude_shape = [source_shape[0], postlude_length, source_shape[2]]
+        prelude = tf.fill(postlude_shape, self.quantization_channels)
+        postlude = tf.fill(postlude_shape, self.quantization_channels)
+        return tf.concat(concat_dim=1, values=[prelude, source, postlude])
+
     def loss(self,
              input_batch,
              global_condition_batch=None,
@@ -653,6 +680,15 @@ class WaveNetModel(object):
             # We mu-law encode and quantize the input audioform.
             discretized_input = mu_law_encode(input_batch,
                                               self.quantization_channels)
+            discretized_input = tf.reshape(discretized_input, [1, -1, 1])
+
+            if local_condition_batch is not None:
+                # Extend the discretized input to match the local conditions
+                # length by "padding" with blank (per ctc loss) values.
+                discretized_input = self._extend_to_match(
+                    target_shape=tf.shape(local_condition_batch),
+                    source=discretized_input)
+
             network_input = self._embed_input(discretized_input)
             raw_output = self._create_network(network_input, gc_embedding,
                                               local_condition_batch)
@@ -661,19 +697,23 @@ class WaveNetModel(object):
                 prediction = tf.reshape(raw_output,
                                         [-1, self.softmax_channels])
 
-                one_hotted_input = self._one_hot(discretized_input)
-                shifted = self._shift_one_sample(one_hotted_input)
                 if self.ctc_loss:
+                    shifted = self._shift_one_sample(discretized_input)
+                    sparse_labels = self._to_sparse(tf.reshape(shifted, [-1, 1]))
+
                     loss = tf.nn.ctc_loss(
                         inputs=raw_output,
-                        labels=tf.reshape(shifted, [-1, 1]),
-                        sequence_length=tf.fill(tf.shape(inputs)[0],
-                                                tf.shape(inputs)[1]),
+                        labels=sparse_labels,
+                        # labels=tf.reshape(shifted, [-1, 1]),
+                        sequence_length=tf.fill([tf.shape(raw_output)[0]],
+                                                tf.shape(raw_output)[1] ),
                         preprocess_collapse_repeated=False,
                         ctc_merge_repeated=False,
                         time_major=False)
 
                 else:
+                    one_hotted_input = self._one_hot(discretized_input)
+                    shifted = self._shift_one_sample(one_hotted_input)
                     loss = tf.nn.softmax_cross_entropy_with_logits(
                         prediction,
                         tf.reshape(shifted, [-1, self.softmax_channels]))
