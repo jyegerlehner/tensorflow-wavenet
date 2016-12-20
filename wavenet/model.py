@@ -118,8 +118,11 @@ class WaveNetModel(object):
             self.softmax_channels = self.quantization_channels + 1
         else:
             self.softmax_channels = self.quantization_channels
-
         self.variables = self._create_variables()
+
+        self.indices = None
+        self.labs = None
+        self.raw_output_shape = None
 
     def _create_variables(self):
         '''This function creates all variables used by the network.
@@ -646,10 +649,13 @@ class WaveNetModel(object):
         return size
 
     def _to_sparse(self, val):
+        self.labs = val
         indices = tf.where(tf.greater(val, -1))
-        return tf.SparseTensor(indices=indices,
+        self.indices = indices
+        sparse = tf.SparseTensor(indices=indices,
                                values=tf.gather_nd(val, indices),
                                shape=tf.cast(tf.shape(val), dtype=tf.int64))
+        return sparse
 
     def _extend_to_match(self, target_shape, source):
         source_shape = tf.shape(source)
@@ -682,24 +688,25 @@ class WaveNetModel(object):
                                               self.quantization_channels)
             discretized_input = tf.reshape(discretized_input, [1, -1, 1])
 
-            if local_condition_batch is not None:
+            if local_condition_batch is not None and self.ctc_loss:
                 # Extend the discretized input to match the local conditions
                 # length by "padding" with blank (per ctc loss) values.
-                discretized_input = self._extend_to_match(
+                extended_discretized_input = self._extend_to_match(
                     target_shape=tf.shape(local_condition_batch),
                     source=discretized_input)
+            else:
+                extended_discretized_input = discretized_input
 
-            network_input = self._embed_input(discretized_input)
+            network_input = self._embed_input(extended_discretized_input)
             raw_output = self._create_network(network_input, gc_embedding,
                                               local_condition_batch)
 
             with tf.name_scope('loss'):
-                prediction = tf.reshape(raw_output,
-                                        [-1, self.softmax_channels])
 
                 if self.ctc_loss:
+                    self.raw_output_shape = tf.shape(raw_output)
                     shifted = self._shift_one_sample(discretized_input)
-                    sparse_labels = self._to_sparse(tf.reshape(shifted, [-1, 1]))
+                    sparse_labels = self._to_sparse(tf.reshape(shifted, [1, -1]))
 
                     loss = tf.nn.ctc_loss(
                         inputs=raw_output,
@@ -712,6 +719,8 @@ class WaveNetModel(object):
                         time_major=False)
 
                 else:
+                    prediction = tf.reshape(raw_output,
+                                            [-1, self.softmax_channels])
                     one_hotted_input = self._one_hot(discretized_input)
                     shifted = self._shift_one_sample(one_hotted_input)
                     loss = tf.nn.softmax_cross_entropy_with_logits(

@@ -313,7 +313,7 @@ class TestNet(tf.test.TestCase):
 
                 else:
                     # Check non-incremental generation
-                    self._load_net(sess)
+#                    self._load_net(sess)
                     generated_waveforms, _ = generate_waveforms(
                         sess, self.net, False, None)
                     check_waveform(
