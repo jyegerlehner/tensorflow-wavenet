@@ -113,16 +113,16 @@ class WaveNetModel(object):
         self.global_condition_cardinality = global_condition_cardinality
         self.local_condition_channels = local_condition_channels
         self.ctc_loss = ctc_loss
-        if self.ctc_loss:
-            # CTC loss requires a category for "blank" value.
-            self.softmax_channels = self.quantization_channels + 1
-        else:
-            self.softmax_channels = self.quantization_channels
+        # Add one category for "blank"
+        self.softmax_channels = self.quantization_channels + 1
         self.variables = self._create_variables()
 
         self.indices = None
         self.labs = None
         self.raw_output_shape = None
+        self.lc_shape = None
+        self.disc_input_shape = None
+
 
     def _create_variables(self):
         '''This function creates all variables used by the network.
@@ -688,9 +688,11 @@ class WaveNetModel(object):
                                               self.quantization_channels)
             discretized_input = tf.reshape(discretized_input, [1, -1, 1])
 
-            if local_condition_batch is not None and self.ctc_loss:
+            if local_condition_batch is not None:
                 # Extend the discretized input to match the local conditions
                 # length by "padding" with blank (per ctc loss) values.
+                self.lc_shape = tf.shape(local_condition_batch)
+                self.disc_input_shape = tf.shape(discretized_input)
                 extended_discretized_input = self._extend_to_match(
                     target_shape=tf.shape(local_condition_batch),
                     source=discretized_input)
@@ -721,7 +723,7 @@ class WaveNetModel(object):
                 else:
                     prediction = tf.reshape(raw_output,
                                             [-1, self.softmax_channels])
-                    one_hotted_input = self._one_hot(discretized_input)
+                    one_hotted_input = self._one_hot(extended_discretized_input)
                     shifted = self._shift_one_sample(one_hotted_input)
                     loss = tf.nn.softmax_cross_entropy_with_logits(
                         prediction,

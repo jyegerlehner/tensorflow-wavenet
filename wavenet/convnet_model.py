@@ -111,9 +111,9 @@ class ConvNetModel(object):
                     'postprocess2',
                     [1, self.output_channels, self.output_channels])
                 current['bias1'] = create_bias_variable(
-                    'bias1', [self.output_channels], value=-0.2)
+                    'bias1', [self.output_channels], value=-0.1)
                 current['bias2'] = create_bias_variable(
-                    'bias2', [self.output_channels], value=-0.2)
+                    'bias2', [self.output_channels], value=-0.1)
                 var['postprocessing'] = current
 
             with tf.variable_scope('upsampling'):

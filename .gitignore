@@ -1,4 +1,7 @@
 logdir/
 VCTK-Corpus/
 *.pyc
+*.wav
+*.csv
+testgen/
 
