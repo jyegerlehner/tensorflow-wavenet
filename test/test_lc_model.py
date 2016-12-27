@@ -106,7 +106,7 @@ class TestLCNet(tf.test.TestCase):
         self.generate = True
         self.momentum = 0.9
         self.global_conditioning = False
-        self.train_iters = 10000
+        self.train_iters = 50000
         self.net = WaveNetModel(
             batch_size=BATCH_SIZE,
             dilations=[1, 2, 4, 8, 16, 32, 64, 128, 256,
@@ -376,11 +376,13 @@ class TestLCNet(tf.test.TestCase):
 
     def _make_training_pair(self):
          text = self._make_text_sequence()
-         waveform = self.make_training_waveform(text, duration_ratio=1.0)
+         duration_ratio = 0.8*np.random.random_sample() + 0.6
+         waveform = self.make_training_waveform(text,
+                                                duration_ratio=duration_ratio)
 #         padded_text = self._pad_text(text)
 #         padded_ascii = char_to_asc(padded_text)
          ascii = char_to_asc(text)
-         return (waveform, None, ascii)
+         return (waveform, None, ascii, duration_ratio)
 
 
     def _make_training_data(self, duration_ratios=None):
@@ -517,7 +519,8 @@ class TestLCNet(tf.test.TestCase):
 #            print("embedding_shape:{}".format(result))
 
 
-            (audio, speaker_ids, ascii) = self._make_training_pair()
+            (audio, speaker_ids, ascii, duration_ratio) = \
+                                            self._make_training_pair()
             feed_dict = {self.audio_placeholder: audio,
                          self.ascii_placeholder: ascii}
 
@@ -527,7 +530,8 @@ class TestLCNet(tf.test.TestCase):
 #                if i % len(audio) == 0:
 #                    (audio, speaker_ids, ascii) = self._make_training_data()
 
-                (audio, speaker_ids, ascii) = self._make_training_pair()
+                (audio, speaker_ids, ascii, duration_ratio) =  \
+                    self._make_training_pair()
                 # Rotate through each input/target-output-pair.
                 feed_dict = {self.audio_placeholder: audio,
                              self.ascii_placeholder: ascii}
@@ -535,7 +539,8 @@ class TestLCNet(tf.test.TestCase):
                 results = sess.run(operations, feed_dict=feed_dict)
 
                 if i % 10 == 0:
-                    print("i: %d loss: %f, text: %s" % (i, results[0], ascii))
+                    print("i: %d loss: %f, text: %s, duration_ratio: %s" % \
+                        (i, results[0], ascii, duration_ratio))
 #                    for result in results:
 #                        print("Result:{}".format(result))
 
