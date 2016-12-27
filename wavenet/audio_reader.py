@@ -235,7 +235,6 @@ class AudioReader(object):
         return self.test_gc_queue.dequeue_many(num_elements)
 
     def thread_main(self, sess, is_train_not_test):
-        buffer_ = np.array([])
         stop = False
 
         # Whether to enqueue training or test data.
@@ -266,29 +265,15 @@ class AudioReader(object):
                     if self.coord.should_stop():
                         stop = True
                         break
-                    if self.silence_threshold is not None:
-                        # Remove silence
-                        audio = trim_silence(audio[:, 0],
-                                             self.silence_threshold)
-                        audio = audio.reshape(-1, 1)
-                        if audio.size == 0:
-                            print("Warning: {} was ignored as it contains only"
-                                  " silence. Consider decreasing trim_silence "
-                                  "threshold, or adjust volume of the audio."
-                                  .format(filename))
 
-                    # Cut samples into fixed size pieces
-                    buffer_ = np.append(buffer_, audio)
-                    while len(buffer_) > 0:
-                        piece = np.reshape(buffer_[:self.sample_size], [-1, 1])
-                        sess.run(self.enqueue,
-                                 feed_dict={self.sample_placeholder: piece,
-                                            self.text_placeholder: char_list})
-                        buffer_ = buffer_[self.sample_size:]
-                        if self.gc_enabled:
-                            sess.run(self.gc_enqueue,
-                                     feed_dict={self.id_placeholder:
-                                                category_id})
+                    sess.run(self.enqueue,
+                             feed_dict={self.sample_placeholder: audio,
+                                        self.text_placeholder: char_list})
+                    buffer_ = buffer_[self.sample_size:]
+                    if self.gc_enabled:
+                        sess.run(self.gc_enqueue,
+                                 feed_dict={self.id_placeholder:
+                                            category_id})
 
         except Exception, e:
             # Report exceptions to the coordinator.

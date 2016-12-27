@@ -18,8 +18,10 @@ def create_embedding_table(name, shape):
         initial_val = np.identity(n=shape[0], dtype=np.float32)
         return tf.Variable(initial_val, name=name)
     else:
-        return create_variable(name, shape)
-
+        initializer = tf.truncated_normal(shape, mean=0.0, stddev=0.3,
+                                dtype=tf.float32)
+        variable = tf.Variable(initializer, name=name)
+        return variable
 
 def create_bias_variable(name, shape, value=0.0):
     '''Create a bias variable with the specified name and shape and initialize
@@ -36,7 +38,9 @@ class ConvNetModel(object):
                  output_channels,
                  local_condition_channels,
                  upsample_rate,
-                 layer_count):
+                 layer_count,
+                 dilations=None,
+                 gated_linear=False):
         self.batch_size = batch_size
         self.encoder_channels = encoder_channels
         self.histograms = histograms
@@ -47,14 +51,27 @@ class ConvNetModel(object):
         self.skip_cuts = []
         self.output_shapes = []
         self.output_width = None
+        self.dilations = dilations
+        self.text_embedded_shape = None
+        self.layer_out_shapes = []
+        self.embedding_shape = None
+        self.text_shape = None
+        self.gated_linear = gated_linear
 
         self.variables = self._create_variables()
 
         assert self.batch_size == 1
 
     def _receptive_field(self):
-        # return 2 ** self.layer_count
-        return 2 + self.layer_count - 1
+        if self.dilations is None:
+            # Single-strided conv filter witdth 2.
+            return 2 + self.layer_count - 1
+        else:
+            # Dilated conv.
+            max_dilation = max(self.dilations)
+            num_stacks = self.dilations.count(max_dilation)
+            size = max_dilation*2 + (num_stacks-1)*(max_dilation*2-1)
+            return size
 
     def _create_variables(self):
         var = dict()
@@ -111,25 +128,33 @@ class ConvNetModel(object):
                     'postprocess2',
                     [1, self.output_channels, self.output_channels])
                 current['bias1'] = create_bias_variable(
-                    'bias1', [self.output_channels], value=-0.1)
+                    'bias1', [self.output_channels], value=0.0)
                 current['bias2'] = create_bias_variable(
-                    'bias2', [self.output_channels], value=-0.1)
+                    'bias2', [self.output_channels], value=0.0)
+                current['projection_filter'] = create_variable(
+                    'lc_proj_filter',
+                    [1,
+                     self.output_channels,
+                     self.local_condition_channels])
+
                 var['postprocessing'] = current
 
             with tf.variable_scope('upsampling'):
                 # filter for tf.nn.conv2d_transpose, with height = 1 to achieve
                 # a 1d deconv.
                 current = dict()
-                current['filter'] = create_variable(
-                    'upsample_filter',
-                    [1,
-                     self.upsample_rate,
-                     self.local_condition_channels,
-                     self.output_channels])
+#                current['filter'] = create_variable(
+#                    'upsample_filter',
+#                    [1,
+#                     self.upsample_rate,
+#                     self.local_condition_channels,
+#                     self.output_channels])
+
+
                 var['upsampling'] = current
         return var
 
-    def _create_layer(self, input, layer_index, output_width):
+    def _create_layer(self, input, layer_index, output_width, dilation):
         is_last_layer = (layer_index == (self.layer_count - 1))
         variables = self.variables['layer_stack'][layer_index]
 
@@ -138,19 +163,25 @@ class ConvNetModel(object):
         filter_bias = variables['filter_bias']
         gate_bias = variables['gate_bias']
 
-        conv_filter = tf.nn.conv1d(input,
-                                   weights_filter,
-                                   stride=1, # 2,
-                                   padding="VALID",
-                                   name="filter") + filter_bias
+        dilation_rate = [dilation] if dilation is not None else None
 
-        conv_gate = tf.nn.conv1d(input,
-                                 weights_gate,
-                                 stride=1, # 2,
-                                 padding="VALID",
-                                 name="gate") + gate_bias
+        conv_filter = tf.nn.convolution(input=input,
+                                        filter=weights_filter,
+                                        padding='VALID',
+                                        dilation_rate=dilation_rate,
+                                        name='filter',
+                                        data_format='NWC') + filter_bias
+        conv_gate = tf.nn.convolution(input=input,
+                                      filter=weights_gate,
+                                      padding='VALID',
+                                      dilation_rate=dilation_rate,
+                                      name='gate',
+                                      data_format='NWC') + gate_bias
 
-        out = tf.tanh(conv_filter) * tf.sigmoid(conv_gate)
+        if self.gated_linear:
+            out = conv_filter * tf.sigmoid(conv_gate)
+        else:
+            out = tf.tanh(conv_filter) * tf.sigmoid(conv_gate)
 
         self.output_shapes.append(tf.shape(out))
         skip_cut = (tf.shape(out)[1] - output_width) / 2
@@ -192,18 +223,19 @@ class ConvNetModel(object):
         else:
             return skip_contribution, None
 
-    def _create_network(self, input_batch):
-        output_width = tf.shape(input_batch)[1] - self._receptive_field() + 1
-        self.output_width = output_width
-
+    def _create_network(self, input_batch, audio_length):
         with tf.name_scope('layer_stack'):
             skip_outs = []
             current_layer = input_batch
             for i in range(self.layer_count):
+                dilation = self.dilations[i] if self.dilations is not None \
+                    else None
                 with tf.name_scope('layer{}'.format(i)):
                     output, current_layer = self._create_layer(
-                        current_layer, i, output_width)
+                        current_layer, i, audio_length, dilation)
                     skip_outs.append(output)
+                    if current_layer is not None:
+                        self.layer_out_shapes.append(tf.shape(current_layer))
 
         with tf.name_scope('postprocessing'):
             w1 = self.variables['postprocessing']['postprocess1']
@@ -217,52 +249,80 @@ class ConvNetModel(object):
             transformed2 = tf.nn.relu(conv1 + b2)
             conv2 = tf.nn.conv1d(transformed2, w2, stride=1, padding="SAME")
 
+            filt = self.variables['postprocessing']['projection_filter']
+            conv_out = tf.nn.conv1d(conv2, filt, stride=1,
+                                       padding="SAME", name="lc_projection")
+
+#            upsampled_shape = [1,
+#                               1,
+#                               input_shape[2] * self.upsample_rate,
+#                               self.local_condition_channels]
+#            filt = self.variables['upsampling']['filter']
+#            # 2d transpose conv with height = 1, width = characters.
+#            upsampled = tf.nn.conv2d_transpose(conv2,
+#                                               filt,
+#                                               upsampled_shape,
+#                                               [1, 1, self.upsample_rate, 1],
+#                                               padding='VALID',
+#                                               name='upsampled')
+        return conv_out
+
+    def _upsample(self, embedding, audio_length):
         with tf.name_scope('upsampling'):
-            # Reshape so we can use 2d conv on it: height = 1
-            # input_shape = tf.shape(conv2)
-            # conv2 = tf.reshape(conv2, [input_shape[0], 1, input_shape[1],
-            #                         input_shape[2]])
-            conv2 = tf.expand_dims(conv2, axis=1)
 
-            input_shape = tf.shape(conv2)
-            upsampled_shape = [1,
-                               1,
-                               input_shape[2] * self.upsample_rate,
-                               self.local_condition_channels]
-            filt = self.variables['upsampling']['filter']
-            # 2d transpose conv with height = 1, width = characters.
-            upsampled = tf.nn.conv2d_transpose(conv2,
-                                               filt,
-                                               upsampled_shape,
-                                               [1, 1, self.upsample_rate, 1],
-                                               padding='VALID',
-                                               name='upsampled')
-            # Remove the dummy "height=1" dimension we added for the 2d conv,
+            # Number of samples per character.
+            sample_density = tf.cast(audio_length, dtype=tf.float32) /  \
+                tf.cast(self.text_shape[0], dtype=tf.float32)
+
+            # Number of samples we've currently got if we preserve density.
+            number_samples = sample_density * tf.cast(tf.shape(embedding)[1], dtype=tf.float32)
+            number_samples = tf.cast(tf.ceil(number_samples), dtype=tf.int32)
+
+            # Reshape so we can use image resize on it: height = 1
+            embedding = tf.expand_dims(embedding, axis=1)
+            upsampled = tf.image.resize_bilinear(embedding,
+                                                 [1, number_samples])
+            # Remove the dummy "height=1" dimension we added for the resize
             # to bring it back to batch x duration x channels.
-#            upsampled = tf.reshape(upsampled, [input_shape[0],
-#                                               -1,
-#                                               self.local_condition_channels])
             upsampled = tf.squeeze(upsampled, axis=1)
-        return upsampled
 
-    def _embed_ascii(self, ascii):
+            # Desired number of samples
+            audio_padding = self._receptive_field() // 2
+            desired_samples = audio_length + 2 * audio_padding
+            cut_size = (number_samples - desired_samples) // 2
+
+            upsampled = tf.slice(upsampled,
+                                 [0, cut_size, 0],
+                                 [-1, desired_samples, -1])
+            return upsampled
+
+
+    def _compute_character_padding(self, audio_pad_size, audio_length):
+        float_padding =  tf.cast(audio_pad_size * self.text_shape[0],
+                                 dtype=tf.float32) / tf.cast(audio_length,
+                                                             dtype=tf.float32)
+        return tf.cast(tf.ceil(float_padding), dtype=tf.int32)
+
+    def _embed_ascii(self, ascii, audio_length):
         with tf.name_scope('input_embedding'):
-
-            # Put 32 NULL entries on either side of the input time
-            # series (dimension 1), and 0 padding before and after on dim 0.
-            pad_size = self._receptive_field() / 2
-            input_batch = tf.pad(ascii, [[0, 0], # pad for dim 0
-                                         [pad_size, pad_size]]) # dim1
-
+            audio_pad_size = self._receptive_field() // 2
+            char_pad = self._compute_character_padding(audio_pad_size,
+                audio_length)
+            # Put entries of 0 on either side of the input time
+            # series (dimension 1).
+            padded_ascii = tf.pad(ascii, [[char_pad, char_pad]]) # dim1
             embedding_table = self.variables['embeddings']['text_embedding']
             embedding = tf.nn.embedding_lookup(embedding_table,
-                                               ascii)
+                                               padded_ascii)
+            self.embedding_shape = tf.shape(embedding)
             shape = [self.batch_size, -1, self.encoder_channels]
             embedding = tf.reshape(embedding, shape)
         return embedding
 
-    def upsample(self, input_text):
+    def upsample(self, input_text, audio_length):
         with tf.name_scope('text_conv_net'):
-            embedding = self._embed_ascii(input_text)
-            upsampled = self._create_network(embedding)
-        return upsampled
+            self.text_shape = tf.shape(input_text)
+            embedding = self._embed_ascii(input_text, audio_length)
+            upsampled = self._upsample(embedding, audio_length)
+            out = self._create_network(upsampled, audio_length)
+        return out

@@ -27,12 +27,12 @@ F3 = 233.08  # B-flat frequency in hz
 # the upper bound on how many audio samples correspond to a single
 # character. The CTC loss can create blanks in order allow the text
 # to catch up to the audio.
-UPSAMPLE_RATE = 300
+UPSAMPLE_RATE = 200
 MEDIAN_SAMPLES_PER_CHAR = 200
-LAYER_COUNT = 7
-TEXT_ENCODER_CHANNELS = 48
-TEXT_ENCODER_OUTPUT_CHANNELS = 128 # 512
-LOCAL_CONDITION_CHANNELS = 32
+LAYER_COUNT = 6
+TEXT_ENCODER_CHANNELS = 8
+TEXT_ENCODER_OUTPUT_CHANNELS = 16 # 128 # 512
+LOCAL_CONDITION_CHANNELS = 16
 BATCH_SIZE = 1
 
 def ascii_to_text(ascii):
@@ -101,24 +101,26 @@ class TestLCNet(tf.test.TestCase):
         print('TestNetWithLocalConditioning setup.')
         sys.stdout.flush()
 
-        self.optimizer_type = 'sgd'
-        self.learning_rate = 0.001
+        self.optimizer_type = 'rmsprop'
+        self.learning_rate = 0.0004
         self.generate = True
-        self.momentum = 0.90
+        self.momentum = 0.9
         self.global_conditioning = False
-        self.train_iters = 300000
+        self.train_iters = 10000
         self.net = WaveNetModel(
             batch_size=BATCH_SIZE,
-            dilations=[1, 2, 4, 8, 16, 32, 64,
-                       1, 2, 4, 8, 16, 32, 64],
+            dilations=[1, 2, 4, 8, 16, 32, 64, 128, 256,
+                       1, 2, 4, 8, 16, 32, 64, 128, 256,
+                       1, 2, 4, 8, 16, 32, 64, 128, 256],
             filter_width=2,
-            residual_channels=32,
-            dilation_channels=32,
+            residual_channels=16,
+            dilation_channels=16,
             quantization_channels=QUANTIZATION_CHANNELS,
             use_biases=True,
             skip_channels=256,
             local_condition_channels=LOCAL_CONDITION_CHANNELS,
-            ctc_loss=False)
+            ctc_loss=False,
+            gated_linear=False)
 
         # Create text encoder network.
         self.text_encoder = ConvNetModel(
@@ -128,7 +130,20 @@ class TestLCNet(tf.test.TestCase):
             output_channels=TEXT_ENCODER_OUTPUT_CHANNELS,
             local_condition_channels=LOCAL_CONDITION_CHANNELS,
             upsample_rate=UPSAMPLE_RATE,
-            layer_count=LAYER_COUNT)
+            layer_count=18,
+            dilations=[1, 2, 4, 8, 16, 32, 64, 128, 256,
+                       1, 2, 4, 8, 16, 32, 64, 128, 256,
+                       1, 2, 4, 8, 16, 32, 64, 128, 256],
+            gated_linear=False)
+
+#        self.text_encoder = ConvNetModel(
+#            batch_size=BATCH_SIZE,
+#            encoder_channels=TEXT_ENCODER_CHANNELS,
+#            histograms=False,
+#            output_channels=TEXT_ENCODER_OUTPUT_CHANNELS,
+#            local_condition_channels=LOCAL_CONDITION_CHANNELS,
+#            upsample_rate=UPSAMPLE_RATE,
+#            layer_count=LAYER_COUNT)
 
         self.audio_placeholder = tf.placeholder(dtype=tf.float32)
         self.gc_placeholder = tf.placeholder(dtype=tf.int32)  \
@@ -136,6 +151,10 @@ class TestLCNet(tf.test.TestCase):
         self.ascii_placeholder = tf.placeholder(dtype=tf.int32)
         self.lc_placeholder = tf.placeholder(dtype=tf.float32)
         self.samples_placeholder = tf.placeholder(dtype=tf.int32)
+        self._initialize_source_waveforms()
+        self.last_start_times = {0:0, 1:0, 2:0, 3:0}
+
+
 
     def _save_net(self, sess):
         saver = tf.train.Saver(var_list=tf.trainable_variables())
@@ -214,7 +233,8 @@ class TestLCNet(tf.test.TestCase):
     def generate_waveforms(self, sess, net, fast_generation, global_condition, ascii):
         next_sample_probs = net.predict_proba(self.samples_placeholder,
             self.gc_placeholder, local_condition=self.lc_placeholder)
-        local_conditions = self.text_encoder.upsample(self.ascii_placeholder)
+        local_conditions = self.text_encoder.upsample(self.ascii_placeholder,
+                             tf.shape(self.ascii_placeholder)[0]*UPSAMPLE_RATE)
 
         num_waveforms = len(ascii)
         gc = None
@@ -229,29 +249,33 @@ class TestLCNet(tf.test.TestCase):
 
         return waveforms, global_condition
 
+
     def interpolate(self, waveform, sample_start, ramp_in_end, sample_end,
                     prev_char, curr_char, source_amplitudes):
 
         prev_inx = char_to_index(prev_char)
         curr_inx = char_to_index(curr_char)
+
         for index in range(sample_start, ramp_in_end):
             curr_weight = (index - sample_start) / float(ramp_in_end -
                                                     sample_start)
+
             prev_weight = 1.0 - curr_weight
             assert (curr_weight >= 0.0) and (curr_weight <= 1.0)
             assert (prev_weight >= 0.0) and (prev_weight <= 1.0)
             assert (curr_weight + prev_weight == 1.0)
-            weighted_val = curr_weight * source_amplitudes[curr_inx, index] \
-                 + prev_weight * source_amplitudes[prev_inx, index]
+            curr_char_start = self.last_start_times[curr_inx]
+            prev_char_start = self.last_start_times[prev_inx]
+            weighted_val = curr_weight *  \
+                  source_amplitudes[curr_inx, index - curr_char_start] \
+                 + prev_weight * source_amplitudes[prev_inx,  \
+                                        index - prev_char_start]
             waveform.append(weighted_val)
         return waveform
 
     prev_char = None
     start_sample = 0
-    def make_training_waveform(self, text_sequence,
-                               source_amplitudes,
-                               times,
-                               duration_ratio):
+    def make_training_waveform(self, text_sequence, duration_ratio=1.0):
 
         # duration of each char in samples.
         char_duration = MEDIAN_SAMPLES_PER_CHAR
@@ -275,19 +299,28 @@ class TestLCNet(tf.test.TestCase):
         # Spend 20% of the character's time ramping from the previous
         # character's waveform to the current character's.
         ramp_duration = int(0.2 * char_duration)
+        while char_duration % 2 != 0:
+            char_duration -= 1
+
         for (prev_char, curr_char) in char_pairs:
             sample_end = sample_start + char_duration
             ramp_in_end = sample_start + ramp_duration
+
+            char_inx = char_to_index(curr_char)
+            # curr char just started at sample_start
+            if (prev_char != curr_char):
+                self.last_start_times[char_inx] = sample_start
+
             # add curr_char's contribution to the waveform.
 
             waveform = self.interpolate(waveform, sample_start, ramp_in_end,
                                    sample_end, prev_char, curr_char,
-                                   source_amplitudes)
-            curr_inx = char_to_index(curr_char)
+                                   self._source_amps)
 
             for index in range(ramp_in_end, sample_end):
-                if index < source_amplitudes.shape[1]:
-                    val = source_amplitudes[curr_inx, index]
+                if index < self._source_amps.shape[1]:
+                    char_start_time = self.last_start_times[char_inx]
+                    val = self._source_amps[char_inx, index - char_start_time]
                 else:
                     val = 0.0
                 waveform.append(val)
@@ -296,10 +329,63 @@ class TestLCNet(tf.test.TestCase):
 
         return waveform
 
+    def _make_text_sequence(self):
+        num_words = np.random.randint(low=2, high=6)
+        chars = [' ']
+        for wordindex in range(num_words):
+            char_inx = np.random.randint(low=0, high=3)
+            char = { 0:'a', 1:'b', 2:'c' }[char_inx]
+            word_len = np.random.randint(low=1, high=3)
+            for i in range(word_len):
+                chars.append(char)
 
-    def _make_training_data(self):
-        """Creates a time-series of sinusoidal audio amplitudes."""
+            num_spaces = np.random.randint(low=1, high=3)
+            for i in range(num_spaces):
+                chars.append(' ')
+        return ''.join(chars)
+
+    def _initialize_source_waveforms(self):
         sample_period = 1.0/SAMPLE_RATE_HZ
+        longest_text_length = 30
+        generation_seconds = longest_text_length * UPSAMPLE_RATE * \
+                             sample_period
+        largest_duration_ratio = 1.4
+        max_generation_samples = generation_seconds * SAMPLE_RATE_HZ
+
+        # Create the time sequence that corresponds to the longest sample
+        # we will generate.
+        times = np.arange(0.0, generation_seconds, sample_period)
+        self._times = times
+
+        if self.global_conditioning:
+            raise ValueError("Global conditioning not supported.")
+
+        self._source_amps = np.zeros(shape=(4, len(times)))
+
+        self._source_amps[0,:] = np.sin(times * 2.0 * np.pi * F1) * 0.9
+        self._source_amps[1,:] = np.sin(times * 2.0 * np.pi * F2) * 0.8
+        self._source_amps[2,:] = np.sin(times * 2.0 * np.pi * F3) * 0.7
+        # silence is zero everywhere.
+        self._source_amps[3,:] = times * 0.0
+
+#    def _pad_text(self, text):
+#        # four spaces before and after to correspond to the width of the
+#        # of the receptive field (8).
+#        return ascii_to_text([0]*3 + char_to_asc(text) + [0]*4)
+
+
+    def _make_training_pair(self):
+         text = self._make_text_sequence()
+         waveform = self.make_training_waveform(text, duration_ratio=1.0)
+#         padded_text = self._pad_text(text)
+#         padded_ascii = char_to_asc(padded_text)
+         ascii = char_to_asc(text)
+         return (waveform, None, ascii)
+
+
+    def _make_training_data(self, duration_ratios=None):
+        """Creates a time-series of sinusoidal audio amplitudes."""
+
         text_sequences = [' a b c  ',
                           ' cc b c a  c ',
                           ' a  a ',
@@ -310,55 +396,28 @@ class TestLCNet(tf.test.TestCase):
                           ' c bb c aaa a',
                           ' ccc b a c a ']
 
-        duration_ratios = [0.9, 1.0, 0.8, 1.4, 0.6, 1.3, 1.1, 0.75, 1.2]
-        # duration_ratios = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
-        longest_text_length = max([len(seq) for seq in text_sequences])
-        generation_seconds = longest_text_length * UPSAMPLE_RATE * \
-                             sample_period
-        largest_duration_ratio = max(duration_ratios)
-        max_generation_samples = generation_seconds * SAMPLE_RATE_HZ
+        if duration_ratios is None:
+            duration_ratios = []
+            for i in range(len(text_sequences)):
+                ratio = 0.8*np.random.random_sample() + 0.6
+                duration_ratios.append(ratio)
 
-        # four spaces before and after to correspond to the width of the
-        # of the receptive field (8).
-        padded_text_sequences = ['    ' + text_seq + '   ' for
-                                 text_seq in text_sequences]
 
-        # Create the time sequence that corresponds to the longest sample
-        # we will generate.
-        times = np.arange(0.0, generation_seconds, sample_period)
-
-        if self.global_conditioning:
-            raise ValueError("Global conditioning not supported.")
-
-        source_amps = np.zeros(shape=(4, len(times)))
-
-        source_amps[0,:] = np.sin(times * 2.0 * np.pi * F1) * 0.9
-        source_amps[1,:] = np.sin(times * 2.0 * np.pi * F2) * 0.8
-        source_amps[2,:] = np.sin(times * 2.0 * np.pi * F3) * 0.7
-        # silence is zero everywhere.
-        source_amps[3,:] = silence_amps = times * 0.0
-
-#        for i in range(source_amps.shape[0]):
-
-#            print("showing {}, times shape:{}, source_amps.shape:{}".format(i,
-#                    times.shape, source_amps[i,:].shape))
-#            plt.plot(times, np.array(source_amps[i,:]))
-#            plt.show()
-
+        #duration_ratios = [0.9, 1.0, 0.8, 1.4, 0.6, 1.3, 1.1, 0.75, 1.2]
 
         target_amplitudes = []
         for (text_sequence, duration_ratio) in zip(text_sequences,
                                                    duration_ratios):
             waveform = self.make_training_waveform(text_sequence,
-                source_amps, times, duration_ratio)
+                                                   duration_ratio)
             target_amplitudes.append(waveform)
 
         speaker_ids = None
-        padded_ascii_sequences = [char_to_asc(text_seq) for text_seq in
-                           padded_text_sequences]
+        ascii_sequences = [char_to_asc(text_seq) for text_seq in
+                           text_sequences]
 #        ascii_sequences = [char_to_asc(text_seq) for text_seq in text_sequences]
 
-        return (target_amplitudes, speaker_ids, padded_ascii_sequences)
+        return (target_amplitudes, speaker_ids, ascii_sequences)
 
 
     # Train a net on a short clip of 3 sine waves superimposed
@@ -375,8 +434,8 @@ class TestLCNet(tf.test.TestCase):
 
         i = 0
         for waveform in audio:
-#            plt.plot(np.array(waveform))
-#            plt.show()
+            plt.plot(np.array(waveform))
+            plt.show()
             print("waveform length:{}".format(len(waveform)))
             librosa.output.write_wav('/tmp/lc_train{}.wav'.format(i),
                                      np.array(waveform, dtype=np.float32),
@@ -400,14 +459,28 @@ class TestLCNet(tf.test.TestCase):
 #                    plt.plot(freqs[indices], power_spectrum[indices])
 #                    plt.show()
 
-        local_conditions = self.text_encoder.upsample(self.ascii_placeholder)
+        local_conditions = self.text_encoder.upsample(self.ascii_placeholder,
+                               tf.shape(self.audio_placeholder)[0])
         loss = self.net.loss(input_batch=self.audio_placeholder,
                              global_condition_batch=self.gc_placeholder,
                              local_condition_batch=local_conditions)
         optimizer = optimizer_factory[self.optimizer_type](
                       learning_rate=self.learning_rate, momentum=self.momentum)
         trainable = tf.trainable_variables()
-        optim = optimizer.minimize(loss, var_list=trainable)
+        #optim = optimizer.minimize(loss, var_list=trainable)
+        # clipped gradients:
+        grads_and_vars = optimizer.compute_gradients(loss, var_list=trainable)
+        def ClipIfNotNone(grad):
+                 if grad is None:
+                     return grad
+                 return tf.clip_by_value(grad, -0.3, 0.3)
+
+        capped_grads_and_vars = [(ClipIfNotNone(gv[0]), gv[1]) for gv in grads_and_vars]
+        def Norm(var):
+            return tf.sqrt(tf.reduce_sum(tf.square(var)))
+        var_norms = [Norm(gv[1]) for gv in grads_and_vars]
+        optim = optimizer.apply_gradients(capped_grads_and_vars)
+
         init = tf.initialize_all_variables()
 
         generated_waveform = None
@@ -415,36 +488,56 @@ class TestLCNet(tf.test.TestCase):
         loss_val = max_allowed_loss
         initial_loss = None
         operations = [loss, optim]
+        # operations.extend(var_norms)
 
         if speaker_ids is not None:
             feed_dict[self.gc_placeholder] = speaker_ids
 
         with self.test_session() as sess:
             sess.run(init)
-            feed_dict = {self.audio_placeholder: audio[0],
-                         self.ascii_placeholder: ascii[0]}
 
-            shapes = sess.run([self.net.lc_shape, self.net.disc_input_shape], feed_dict=feed_dict)
-            #output_width = sess.run(self.text_encoder.output_width, feed_dict)
+#            ops = []
+#            ops.extend(self.text_encoder.skip_cuts)
+#            (audio, speaker_ids, ascii) = self._make_training_data()
+#            feed_dict = {self.audio_placeholder: audio[2],
+#                         self.ascii_placeholder: ascii[2]}
+#            print("text:{}".format(ascii[2]))
+#            results = sess.run(self.text_encoder.output_shapes, feed_dict)
+#            for result in results:
+#                print("shape: {}".format(result))
+#            results = sess.run(self.text_encoder.skip_cuts, feed_dict)
+#            for result in results:
+#                print("shape: {}".format(result))
+#            result = sess.run(self.text_encoder.output_width, feed_dict)
+#            print("output_width:{}".format(result))
 
-            print("lc shape:{}, disc_input shape:{}".format(shapes[0], shapes[1]))
-            # print("Output width:{}".format(output_width))
+#            result = sess.run(self.text_encoder.text_shape, feed_dict)
+#            print("text_shape:{}".format(result))
+#            result = sess.run(self.text_encoder.embedding_shape, feed_dict)
+#            print("embedding_shape:{}".format(result))
 
+
+            (audio, speaker_ids, ascii) = self._make_training_pair()
+            feed_dict = {self.audio_placeholder: audio,
+                         self.ascii_placeholder: ascii}
 
             initial_loss = sess.run(loss, feed_dict=feed_dict)
-#            indices = sess.run([self.net.indices, self.net.labs, self.net.raw_output_shape], feed_dict=feed_dict)
-#            print("indices:{}, \n dense val:{}".format(indices[0], indices[1]))
-#            print("raw out shape:{}".format(indices[2]))
 
             for i in range(self.train_iters):
-                # Rotate through each input/target-output-pair.
-                input_index = i % len(audio)
-                feed_dict = {self.audio_placeholder: audio[input_index],
-                             self.ascii_placeholder: ascii[input_index]}
+#                if i % len(audio) == 0:
+#                    (audio, speaker_ids, ascii) = self._make_training_data()
 
-                [results] = sess.run([operations], feed_dict=feed_dict)
+                (audio, speaker_ids, ascii) = self._make_training_pair()
+                # Rotate through each input/target-output-pair.
+                feed_dict = {self.audio_placeholder: audio,
+                             self.ascii_placeholder: ascii}
+
+                results = sess.run(operations, feed_dict=feed_dict)
+
                 if i % 10 == 0:
-                    print("i: %d loss: %f" % (i, results[0]))
+                    print("i: %d loss: %f, text: %s" % (i, results[0], ascii))
+#                    for result in results:
+#                        print("Result:{}".format(result))
 
             self._save_net(sess)
 #            loss_val = results[0]
@@ -475,6 +568,10 @@ class TestLCNet(tf.test.TestCase):
                     #     check_waveform( self.assertGreater, waveform, id[0])
 
                 else:
+                    duration_ratios = [0.9, 1.0, 0.8, 1.4, 0.6, 1.3,
+                                       1.1, 0.75, 1.2]
+                    (audio, speaker_ids, ascii) = self._make_training_data()
+                    #    duration_ratios=duration_ratios)
                     # Check non-incremental generation
                     # self._load_net(sess)
                     generated_waveforms, _ = self.generate_waveforms(

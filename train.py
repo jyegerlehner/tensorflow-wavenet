@@ -37,6 +37,7 @@ ENCODER_CHANNELS = 48
 ENCODER_OUTPUT_CHANNELS = 512
 LOCAL_CONDITION_CHANNELS = 32
 UPSAMPLE_RATE = 1000  # Typical number of audio samples per
+ENCODER_LAYER_COUNT =
 
 
 def get_arguments():
@@ -117,6 +118,9 @@ def get_arguments():
                         default=LOCAL_CONDITION_CHANNELS,
                         help='Number of channels in the upsampled local '
                              'condition fed to the audio wavenet.')
+    parser.add_argument('--encoder_layer_count', type=int,
+                        default=ENCODER_LAYER_COUNT,
+                        help='Number of layers in the the text encoder.')
     return parser.parse_args()
 
 
@@ -278,7 +282,8 @@ def main():
         histograms=args.histograms,
         output_channels=args.encoder_output_channels,
         local_condition_channels=args.lc_channels,
-        up_sample_rate=UPSAMPLE_RATE)
+        up_sample_rate=UPSAMPLE_RATE,
+        layer_count=args.encoder_layer_count)
 
     # Create network.
     net = WaveNetModel(

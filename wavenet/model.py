@@ -18,7 +18,10 @@ def create_embedding_table(name, shape):
         initial_val = np.identity(n=shape[0], dtype=np.float32)
         return tf.Variable(initial_val, name=name)
     else:
-        return create_variable(name, shape)
+        initializer = tf.truncated_normal(shape, mean=0.0, stddev=0.3,
+                                dtype=tf.float32)
+        variable = tf.Variable(initializer, name=name)
+        return variable
 
 
 def create_bias_variable(name, shape, initial_value=0.0):
@@ -59,7 +62,8 @@ class WaveNetModel(object):
                  global_condition_channels=None,
                  global_condition_cardinality=None,
                  local_condition_channels=None,
-                 ctc_loss=False):
+                 ctc_loss=False,
+                 gated_linear=False):
         '''Initializes the WaveNet model.
 
         Args:
@@ -116,12 +120,14 @@ class WaveNetModel(object):
         # Add one category for "blank"
         self.softmax_channels = self.quantization_channels + 1
         self.variables = self._create_variables()
+        self.gated_linear = gated_linear
 
         self.indices = None
         self.labs = None
         self.raw_output_shape = None
         self.lc_shape = None
         self.disc_input_shape = None
+        self.extended_shape = None
 
 
     def _create_variables(self):
@@ -156,16 +162,31 @@ class WaveNetModel(object):
                 for i, dilation in enumerate(self.dilations):
                     with tf.variable_scope('layer{}'.format(i)):
                         current = dict()
-                        current['filter'] = create_variable(
-                            'filter',
-                            [self.filter_width,
-                             self.residual_channels,
-                             self.dilation_channels])
-                        current['gate'] = create_variable(
-                            'gate',
-                            [self.filter_width,
-                             self.residual_channels,
-                             self.dilation_channels])
+                        if (i == 0 and self.local_condition_channels
+                            is not None):
+                            current['filter'] = create_variable(
+                                'filter',
+                                [self.filter_width,
+                                 self.residual_channels +
+                                     self.local_condition_channels,
+                                 self.dilation_channels])
+                            current['gate'] = create_variable(
+                                'gate',
+                                [self.filter_width,
+                                 self.residual_channels +
+                                     self.local_condition_channels,
+                                 self.dilation_channels])
+                        else:
+                            current['filter'] = create_variable(
+                                'filter',
+                                [self.filter_width,
+                                 self.residual_channels,
+                                 self.dilation_channels])
+                            current['gate'] = create_variable(
+                                'gate',
+                                [self.filter_width,
+                                 self.residual_channels,
+                                 self.dilation_channels])
                         current['dense'] = create_variable(
                             'dense',
                             [1,
@@ -186,16 +207,6 @@ class WaveNetModel(object):
                                 'gc_filter',
                                 [1, self.global_condition_channels,
                                  self.dilation_channels])
-
-                        if self.local_condition_channels is not None:
-                            current['lc_gateweights'] = create_variable(
-                                'lc_gate',
-                                [1, self.local_condition_channels,
-                                    self.dilation_channels])
-                            current['lc_filtweights'] = create_variable(
-                                'lc_filter',
-                                [1, self.local_condition_channels,
-                                    self.dilation_channels])
 
                         if self.use_biases:
                             current['filter_bias'] = create_bias_variable(
@@ -221,22 +232,13 @@ class WaveNetModel(object):
                 if self.use_biases:
                     current['postprocess1_bias'] = create_bias_variable(
                         'postprocess1_bias',
-                        [self.skip_channels], -0.1)
+                        [self.skip_channels], 0.0)
                     current['postprocess2_bias'] = create_bias_variable(
                         'postprocess2_bias',
-                        [self.skip_channels], -0.1)
+                        [self.skip_channels], 0.0)
                 var['postprocessing'] = current
 
         return var
-
-#    def _create_causal_layer(self, input_batch):
-#        '''Creates a single causal convolution layer.
-
-#        The layer can change the number of channels.
-#        '''
-#        with tf.name_scope('causal_layer'):
-#            weights_filter = self.variables['causal_layer']['filter']
-#            return causal_conv(input_batch, weights_filter, 1)
 
     def _create_dilation_layer(self, input_batch, layer_index, dilation,
                                global_condition_batch, local_condition_batch,
@@ -272,8 +274,15 @@ class WaveNetModel(object):
         weights_filter = variables['filter']
         weights_gate = variables['gate']
 
-        conv_filter = causal_conv(input_batch, weights_filter, dilation)
-        conv_gate = causal_conv(input_batch, weights_gate, dilation)
+        if layer_index == 0:
+            conv_filt_inp = tf.concat(concat_dim=2,
+                                      values=[local_condition_batch,
+                                              input_batch])
+        else:
+            conv_filt_inp = input_batch
+
+        conv_filter = causal_conv(conv_filt_inp, weights_filter, dilation)
+        conv_gate = causal_conv(conv_filt_inp, weights_gate, dilation)
 
         if global_condition_batch is not None:
             weights_gc_filter = variables['gc_filtweights']
@@ -289,27 +298,17 @@ class WaveNetModel(object):
                                                  padding="SAME",
                                                  name="gc_gate")
 
-        if local_condition_batch is not None:
-            weights_lc_filter = variables['lc_filtweights']
-            conv_filter = conv_filter + tf.nn.conv1d(local_condition_batch,
-                                                     weights_lc_filter,
-                                                     stride=1,
-                                                     padding="SAME",
-                                                     name="lc_filter")
-            weights_lc_gate = variables['lc_gateweights']
-            conv_gate = conv_gate + tf.nn.conv1d(local_condition_batch,
-                                                 weights_lc_gate,
-                                                 stride=1,
-                                                 padding="SAME",
-                                                 name="lc_gate")
-
         if self.use_biases:
             filter_bias = variables['filter_bias']
             gate_bias = variables['gate_bias']
             conv_filter = tf.add(conv_filter, filter_bias)
             conv_gate = tf.add(conv_gate, gate_bias)
 
-        out = tf.tanh(conv_filter) * tf.sigmoid(conv_gate)
+
+        if self.gated_linear:
+            out = conv_filter * tf.sigmoid(conv_gate)
+        else:
+            out = tf.tanh(conv_filter) * tf.sigmoid(conv_gate)
 
         if not is_last_layer:
             # Last residual layer output does not connect to anything.
@@ -660,11 +659,10 @@ class WaveNetModel(object):
     def _extend_to_match(self, target_shape, source):
         source_shape = tf.shape(source)
         source_length = source_shape[1]
-        prelude_length = (target_shape[1] - source_length) / 2
+        prelude_length = tf.cast((target_shape[1] - source_length) / 2, tf.int32)
         postlude_length = target_shape[1] - prelude_length - source_length
-        prelude_shape = source_shape
+        prelude_shape = tf.cast(source_shape, tf.int32)
         prelude_shape = [source_shape[0], prelude_length, source_shape[2]]
-        postlude_shape = source_shape
         postlude_shape = [source_shape[0], postlude_length, source_shape[2]]
         prelude = tf.fill(postlude_shape, self.quantization_channels)
         postlude = tf.fill(postlude_shape, self.quantization_channels)
@@ -696,10 +694,12 @@ class WaveNetModel(object):
                 extended_discretized_input = self._extend_to_match(
                     target_shape=tf.shape(local_condition_batch),
                     source=discretized_input)
+                self.extended_shape = tf.shape(extended_discretized_input)
             else:
                 extended_discretized_input = discretized_input
 
             network_input = self._embed_input(extended_discretized_input)
+
             raw_output = self._create_network(network_input, gc_embedding,
                                               local_condition_batch)
 
@@ -715,7 +715,7 @@ class WaveNetModel(object):
                         labels=sparse_labels,
                         # labels=tf.reshape(shifted, [-1, 1]),
                         sequence_length=tf.fill([tf.shape(raw_output)[0]],
-                                                tf.shape(raw_output)[1] ),
+                                                 tf.shape(raw_output)[1]),
                         preprocess_collapse_repeated=False,
                         ctc_merge_repeated=False,
                         time_major=False)
