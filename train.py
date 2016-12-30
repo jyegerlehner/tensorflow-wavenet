@@ -361,50 +361,49 @@ def main():
         step = None
         test_loss_value = 0.0
         try:
-            with coord.stop_on_exception():
-                last_saved_step = saved_global_step
-                for step in range(saved_global_step + 1, args.num_steps):
-                    if coord.should_stop() or reader.please_stop:
-                        raise ValueError("Reader thread requested stop.")
-                    start_time = time.time()
-                    if args.store_metadata and step % 50 == 0:
-                        # Slow run that stores extra information for debugging.
-                        print('Storing metadata')
-                        run_options = tf.RunOptions(
-                            trace_level=tf.RunOptions.FULL_TRACE)
-                        summary, loss_value, _ = sess.run(
-                            [summaries, loss, optim],
-                            options=run_options,
-                            run_metadata=run_metadata)
-                        writer.add_summary(summary, step)
-                        writer.add_run_metadata(run_metadata,
-                                                'step_{:04d}'.format(step))
-                        tl = timeline.Timeline(run_metadata.step_stats)
-                        timeline_path = os.path.join(logdir, 'timeline.trace')
-                        with open(timeline_path, 'w') as f:
-                            f.write(tl.generate_chrome_trace_format(show_memory=True))
-                    else:
-                        summary, loss_value, _ = sess.run([summaries, loss, optim])
-                        writer.add_summary(summary, step)
+            last_saved_step = saved_global_step
+            for step in range(saved_global_step + 1, args.num_steps):
+                if coord.should_stop() or reader.please_stop:
+                    raise ValueError("Reader thread requested stop.")
+                start_time = time.time()
+                if args.store_metadata and step % 50 == 0:
+                    # Slow run that stores extra information for debugging.
+                    print('Storing metadata')
+                    run_options = tf.RunOptions(
+                        trace_level=tf.RunOptions.FULL_TRACE)
+                    summary, loss_value, _ = sess.run(
+                        [summaries, loss, optim],
+                        options=run_options,
+                        run_metadata=run_metadata)
+                    writer.add_summary(summary, step)
+                    writer.add_run_metadata(run_metadata,
+                                            'step_{:04d}'.format(step))
+                    tl = timeline.Timeline(run_metadata.step_stats)
+                    timeline_path = os.path.join(logdir, 'timeline.trace')
+                    with open(timeline_path, 'w') as f:
+                        f.write(tl.generate_chrome_trace_format(show_memory=True))
+                else:
+                    summary, loss_value, _ = sess.run([summaries, loss, optim])
+                    writer.add_summary(summary, step)
 
-                    # Print an asterisk only if we've recomputed test loss.
-                    test_computed = ' '
-                    if test_interval > 0 and step % test_interval == 0:
-                        test_steps = wavenet_params["test_steps"]
-                        test_loss_value = compute_test_loss(sess, test_steps,
-                                                            test_loss)
-                        test_computed = '*'
+                # Print an asterisk only if we've recomputed test loss.
+                test_computed = ' '
+                if test_interval > 0 and step % test_interval == 0:
+                    test_steps = wavenet_params["test_steps"]
+                    test_loss_value = compute_test_loss(sess, test_steps,
+                                                        test_loss)
+                    test_computed = '*'
 
 
-                    duration = time.time() - start_time
-                    print('step {:d} - loss = {:.3f}, last test loss = {:3f},'
-                          ' ({:.3f} sec/step) {}'
-                          .format(step, loss_value, test_loss_value, duration,
-                                  test_computed))
+                duration = time.time() - start_time
+                print('step {:d} - loss = {:.3f}, last test loss = {:3f},'
+                      ' ({:.3f} sec/step) {}'
+                      .format(step, loss_value, test_loss_value, duration,
+                              test_computed))
 
-                    if step % args.checkpoint_every == 0:
-                        save(saver, sess, logdir, step)
-                        last_saved_step = step
+                if step % args.checkpoint_every == 0:
+                    save(saver, sess, logdir, step)
+                    last_saved_step = step
 
         except Exception, e:
             # Introduce a line break after ^C is displayed so save message
