@@ -19,6 +19,11 @@ WINDOW = 8000
 WAVENET_PARAMS = './wavenet_params.json'
 SAVE_EVERY = None
 SILENCE_THRESHOLD = 0.1
+ENCODER_CHANNELS = 48
+ENCODER_OUTPUT_CHANNELS = 512
+LOCAL_CONDITION_CHANNELS = 32
+UPSAMPLE_RATE = 1000  # Typical number of audio samples per
+DURATION_RATIO = 1.0
 
 
 def get_arguments():
@@ -39,10 +44,12 @@ def get_arguments():
     parser.add_argument(
         'checkpoint', type=str, help='Which model checkpoint to generate from')
     parser.add_argument(
-        '--samples',
-        type=int,
-        default=SAMPLES,
-        help='How many waveform samples to generate')
+        '--duration_ratio',
+        type=_ensure_positive_float,
+        default=DURATION_RATIO,
+        help='The ratio of the duration of the audio to the duration it would '
+        'have if it were the median ratio of duration to number of text '
+        ' characters.')
     parser.add_argument(
         '--temperature',
         type=_ensure_positive_float,
@@ -101,6 +108,33 @@ def get_arguments():
         type=int,
         default=None,
         help='ID of category to generate, if globally conditioned.')
+    parser.add_argument(
+        '--encoder_channels', type=int,
+        default=ENCODER_CHANNELS,
+        help='Number of channels in the text encoder net.')
+    parser.add_argument(
+        '--encoder_output_channels',
+        type=int,
+        default=ENCODER_OUTPUT_CHANNELS,
+        help='Number of output channels from the text encoder '
+             'net.')
+    parser.add_argument(
+        '--lc_channels',
+        type=int,
+        default=LOCAL_CONDITION_CHANNELS,
+        help='Number of channels in the upsampled local '
+             'condition fed to the audio wavenet.')
+    parser.add_argument(
+        '--encoder_layer_count',
+        type=int,
+        default=ENCODER_LAYER_COUNT,
+        help='Number of layers in the the text encoder.')
+    parser.add_argument(
+        '--text',
+        type=str,
+        default='Here we go.',
+        help='Text to convert to speech.')
+
     arguments = parser.parse_args()
     if arguments.gc_channels is not None:
         if arguments.gc_cardinality is None:
@@ -122,20 +156,8 @@ def write_wav(waveform, sample_rate, filename):
     print('Updated wav file at {}'.format(filename))
 
 
-def create_seed(filename,
-                sample_rate,
-                quantization_channels,
-                window_size=WINDOW,
-                silence_threshold=SILENCE_THRESHOLD):
-    audio, _ = librosa.load(filename, sr=sample_rate, mono=True)
-    audio = audio_reader.trim_silence(audio, silence_threshold)
-
-    quantized = mu_law_encode(audio, quantization_channels)
-    cut_index = tf.cond(tf.size(quantized) < tf.constant(window_size),
-            lambda: tf.size(quantized),
-            lambda: tf.constant(window_size))
-
-    return quantized[:cut_index]
+def text_to_ascii(text):
+    return [ord(char) for char in text]
 
 
 def main():
@@ -162,16 +184,32 @@ def main():
         global_condition_cardinality=args.gc_cardinality,
         residual_postproc=wavenet_params["residual_postproc"])
 
+    text_encoder = ConvNetModel(
+        batch_size=1
+        encoder_channels=args.encoder_channels,
+        histograms=args.histograms,
+        output_channels=args.encoder_output_channels,
+        local_condition_channels=args.lc_channels,
+        up_sample_rate=UPSAMPLE_RATE,
+        layer_count=args.encoder_layer_count,
+        layer_count=18,
+        dilations=[1, 2, 4, 8, 16, 32, 64, 128, 256,
+                   1, 2, 4, 8, 16, 32, 64, 128, 256,
+                   1, 2, 4, 8, 16, 32, 64, 128, 256],
+        gated_linear=False)
+
+    text = args.text
+    duration_in_characters = len(text)
+    duration_in_samples = duration_in_characters * MEDIAN_CHAR_SAMPLES * \
+                          duration_ratio
+    duration_in_samples = int(duration_in_samples)
+
     samples = tf.placeholder(tf.int32)
+    lc_placeholder = tf.placeholder(dtype=tf.float32)
+    ascii_placeholder = tf.placeholder(dtype=tf.int32)
 
-    if args.fast_generation:
-        next_sample = net.predict_proba_incremental(samples, args.gc_id)
-    else:
-        next_sample = net.predict_proba(samples, args.gc_id)
-
-    if args.fast_generation:
-        sess.run(tf.initialize_all_variables())
-        sess.run(net.init_ops)
+    local_conditions = text_encoder.upsample(text, duration_in_samples)
+    next_sample = net.predict_proba(samples, args.gc_id, lc_placeholder)
 
     variables_to_restore = {
         var.name[:-2]: var for var in tf.all_variables()
@@ -183,46 +221,34 @@ def main():
 
     quantization_channels = wavenet_params['quantization_channels']
     decode = mu_law_decode(samples, quantization_channels)
-    if args.wav_seed:
-        seed = create_seed(args.wav_seed,
-                           wavenet_params['sample_rate'],
-                           quantization_channels)
-        waveform = sess.run(seed).tolist()
-    else:
-        waveform = np.random.randint(quantization_channels, size=(1,)).tolist()
+    waveform = np.random.randint(quantization_channels, size=(1,)).tolist()
 
-    if args.fast_generation and args.wav_seed:
-        # When using the incremental generation, we need to
-        # feed in all priming samples one by one before starting the
-        # actual generation.
-        # TODO This could be done much more efficiently by passing the waveform
-        # to the incremental generator as an optional argument, which would be
-        # used to fill the queues initially.
-        outputs = [next_sample]
-        outputs.extend(net.push_ops)
+    ascii = text_to_ascii(text)
 
-        print('Priming generation...')
-        for i, x in enumerate(waveform[:-(args.window + 1)]):
-            if i % 100 == 0:
-                print('Priming sample {}'.format(i))
-            sess.run(outputs, feed_dict={samples: x})
-        print('Done.')
+    # First generate the local conditions from the text.
+    lc = sess.run(local_conditions,
+                  feed_dict={ascii_placeholder: ascii})
 
     last_sample_timestamp = datetime.now()
-    for step in range(args.samples):
-        if args.fast_generation:
-            outputs = [next_sample]
-            outputs.extend(net.push_ops)
-            window = waveform[-1]
+    for step in range(1,args.samples):
+#        if len(waveform) > args.window:
+#            window = waveform[-args.window:]
+#        else:
+#            window = waveform
+        receptive_field = net.receptive_field()
+        if i >= receptive_field:
+            window = waveform[step-receptive_field:step]
+            lc_window = lc[:,step-receptive_field:step,:]
         else:
-            if len(waveform) > args.window:
-                window = waveform[-args.window:]
-            else:
-                window = waveform
-            outputs = [next_sample]
+            window = waveform[:step]
+            lc_window = lc[:,:step,:]
+
+        outputs = next_sample
 
         # Run the WaveNet to predict the next sample.
-        prediction = sess.run(outputs, feed_dict={samples: window})[0]
+        prediction = sess.run(outputs,
+                              feed_dict={samples: window,
+                                         lc_placeholder: lc_window})
 
         # Scale prediction distribution using temperature.
         np.seterr(divide='ignore')

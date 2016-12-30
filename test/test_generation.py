@@ -5,7 +5,6 @@ import tensorflow as tf
 import sys
 import os
 from wavenet import WaveNetModel
-# sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
 
 class TestGeneration(tf.test.TestCase):

@@ -41,14 +41,13 @@ class WaveNetModel(object):
         residual_channels = 16  # Not specified in the paper.
         dilation_channels = 32  # Not specified in the paper.
         skip_channels = 16      # Not specified in the paper.
-        net = WaveNetModel(batch_size, dilations, filter_width,
+        net = WaveNetModel( dilations, filter_width,
                            residual_channels, dilation_channels,
                            skip_channels)
         loss = net.loss(input_batch)
     '''
 
     def __init__(self,
-                 batch_size,
                  dilations,
                  filter_width,
                  residual_channels,
@@ -67,8 +66,6 @@ class WaveNetModel(object):
         '''Initializes the WaveNet model.
 
         Args:
-            batch_size: How many audio files are supplied per batch
-                (recommended: 1).
             dilations: A list with the dilation factor for each layer.
             filter_width: The samples that are included in each convolution,
                 after dilating.
@@ -104,7 +101,6 @@ class WaveNetModel(object):
                 Otherwise we use cross entropy.
 
         '''
-        self.batch_size = batch_size
         self.dilations = dilations
         self.filter_width = filter_width
         self.residual_channels = residual_channels
@@ -463,9 +459,9 @@ class WaveNetModel(object):
         q = tf.FIFOQueue(
             1,
             dtypes=tf.float32,
-            shapes=(self.batch_size, self.residual_channels))
+            shapes=(1, self.residual_channels))
         init = q.enqueue_many(
-            tf.zeros((1, self.batch_size, self.residual_channels)))
+            tf.zeros((1, 1, self.residual_channels)))
 
         current_state = q.dequeue()
         current_layer = tf.reshape(current_layer,
@@ -486,10 +482,9 @@ class WaveNetModel(object):
                     q = tf.FIFOQueue(
                         dilation,
                         dtypes=tf.float32,
-                        shapes=(self.batch_size, self.residual_channels))
+                        shapes=(1, self.residual_channels))
                     init = q.enqueue_many(
-                        tf.zeros((dilation, self.batch_size,
-                                  self.residual_channels)))
+                        tf.zeros((dilation, 1, self.residual_channels)))
 
                     current_state = q.dequeue()
                     push = q.enqueue([current_layer])
@@ -538,10 +533,9 @@ class WaveNetModel(object):
                 input_batch,
                 depth=self.softmax_channels,
                 dtype=tf.float32)
-            print("batch_size:{}, softmax_channels:{}".format(self.batch_size,
-                  self.softmax_channels))
+            print("softmax_channels:{}".format(self.softmax_channels))
             encoded = tf.reshape(encoded,
-                                 [self.batch_size, -1, self.softmax_channels])
+                                 [1, -1, self.softmax_channels])
             return encoded
 
     def _embed_input(self, input_batch):
@@ -554,7 +548,7 @@ class WaveNetModel(object):
             embedding_table = self.variables['embeddings']['input_embedding']
             embedding = tf.nn.embedding_lookup(embedding_table,
                                                input_batch)
-            shape = [self.batch_size, -1, self.residual_channels]
+            shape = [1, -1, self.residual_channels]
             embedding = tf.reshape(embedding, shape)
         return embedding
 
@@ -584,8 +578,7 @@ class WaveNetModel(object):
 
         if embedding is not None:
             embedding = tf.reshape(
-                embedding,
-                [self.batch_size, 1, self.global_condition_channels])
+                embedding, [1, 1, self.global_condition_channels])
 
         return embedding
 

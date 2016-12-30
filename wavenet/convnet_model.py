@@ -32,7 +32,6 @@ def create_bias_variable(name, shape, value=0.0):
 
 class ConvNetModel(object):
     def __init__(self,
-                 batch_size,
                  encoder_channels,
                  histograms,
                  output_channels,
@@ -41,7 +40,6 @@ class ConvNetModel(object):
                  layer_count,
                  dilations=None,
                  gated_linear=False):
-        self.batch_size = batch_size
         self.encoder_channels = encoder_channels
         self.histograms = histograms
         self.output_channels = output_channels
@@ -59,8 +57,6 @@ class ConvNetModel(object):
         self.gated_linear = gated_linear
 
         self.variables = self._create_variables()
-
-        assert self.batch_size == 1
 
     def _receptive_field(self):
         if self.dilations is None:
@@ -315,7 +311,7 @@ class ConvNetModel(object):
             embedding = tf.nn.embedding_lookup(embedding_table,
                                                padded_ascii)
             self.embedding_shape = tf.shape(embedding)
-            shape = [self.batch_size, -1, self.encoder_channels]
+            shape = [1, -1, self.encoder_channels]
             embedding = tf.reshape(embedding, shape)
         return embedding
 

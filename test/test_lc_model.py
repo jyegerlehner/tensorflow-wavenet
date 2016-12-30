@@ -33,7 +33,6 @@ LAYER_COUNT = 6
 TEXT_ENCODER_CHANNELS = 8
 TEXT_ENCODER_OUTPUT_CHANNELS = 16 # 128 # 512
 LOCAL_CONDITION_CHANNELS = 16
-BATCH_SIZE = 1
 
 def ascii_to_text(ascii):
     return [chr(code) for code in ascii]
@@ -101,14 +100,13 @@ class TestLCNet(tf.test.TestCase):
         print('TestNetWithLocalConditioning setup.')
         sys.stdout.flush()
 
-        self.optimizer_type = 'rmsprop'
+        self.optimizer_type = 'adam'
         self.learning_rate = 0.0004
         self.generate = True
         self.momentum = 0.9
         self.global_conditioning = False
-        self.train_iters = 50000
+        self.train_iters = 100
         self.net = WaveNetModel(
-            batch_size=BATCH_SIZE,
             dilations=[1, 2, 4, 8, 16, 32, 64, 128, 256,
                        1, 2, 4, 8, 16, 32, 64, 128, 256,
                        1, 2, 4, 8, 16, 32, 64, 128, 256],
@@ -124,7 +122,6 @@ class TestLCNet(tf.test.TestCase):
 
         # Create text encoder network.
         self.text_encoder = ConvNetModel(
-            batch_size=BATCH_SIZE,
             encoder_channels=TEXT_ENCODER_CHANNELS,
             histograms=False,
             output_channels=TEXT_ENCODER_OUTPUT_CHANNELS,
@@ -135,15 +132,6 @@ class TestLCNet(tf.test.TestCase):
                        1, 2, 4, 8, 16, 32, 64, 128, 256,
                        1, 2, 4, 8, 16, 32, 64, 128, 256],
             gated_linear=False)
-
-#        self.text_encoder = ConvNetModel(
-#            batch_size=BATCH_SIZE,
-#            encoder_channels=TEXT_ENCODER_CHANNELS,
-#            histograms=False,
-#            output_channels=TEXT_ENCODER_OUTPUT_CHANNELS,
-#            local_condition_channels=LOCAL_CONDITION_CHANNELS,
-#            upsample_rate=UPSAMPLE_RATE,
-#            layer_count=LAYER_COUNT)
 
         self.audio_placeholder = tf.placeholder(dtype=tf.float32)
         self.gc_placeholder = tf.placeholder(dtype=tf.int32)  \
@@ -417,7 +405,6 @@ class TestLCNet(tf.test.TestCase):
         speaker_ids = None
         ascii_sequences = [char_to_asc(text_seq) for text_seq in
                            text_sequences]
-#        ascii_sequences = [char_to_asc(text_seq) for text_seq in text_sequences]
 
         return (target_amplitudes, speaker_ids, ascii_sequences)
 
@@ -436,8 +423,8 @@ class TestLCNet(tf.test.TestCase):
 
         i = 0
         for waveform in audio:
-            plt.plot(np.array(waveform))
-            plt.show()
+#            plt.plot(np.array(waveform))
+#            plt.show()
             print("waveform length:{}".format(len(waveform)))
             librosa.output.write_wav('/tmp/lc_train{}.wav'.format(i),
                                      np.array(waveform, dtype=np.float32),

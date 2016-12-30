@@ -17,9 +17,8 @@ import time
 import tensorflow as tf
 from tensorflow.python.client import timeline
 
-from wavenet import WaveNetModel, AudioReader, optimizer_factory
+from wavenet import WaveNetModel, AudioReader, optimizer_factory, ConvNetModel
 
-BATCH_SIZE = 1
 DATA_DIRECTORY = './VCTK-Corpus'
 LOGDIR_ROOT = './logdir'
 CHECKPOINT_EVERY = 50
@@ -27,17 +26,16 @@ NUM_STEPS = int(1e5)
 LEARNING_RATE = 1e-3
 WAVENET_PARAMS = './wavenet_params.json'
 STARTED_DATESTRING = "{0:%Y-%m-%dT%H-%M-%S}".format(datetime.now())
-SAMPLE_SIZE = 100000
+MAX_SAMPLE_SIZE = 120000
 L2_REGULARIZATION_STRENGTH = 0
 SILENCE_THRESHOLD = 0.3
 EPSILON = 0.001
 MOMENTUM = 0.9
 BLACKLIST='./blacklist.json'
-ENCODER_CHANNELS = 48
-ENCODER_OUTPUT_CHANNELS = 512
-LOCAL_CONDITION_CHANNELS = 32
-UPSAMPLE_RATE = 1000  # Typical number of audio samples per
-ENCODER_LAYER_COUNT =
+ENCODER_CHANNELS = 12
+ENCODER_OUTPUT_CHANNELS = 64
+LOCAL_CONDITION_CHANNELS = 16
+UPSAMPLE_RATE = 1000  # Typical number of audio samples per character
 
 
 def get_arguments():
@@ -50,8 +48,6 @@ def get_arguments():
 
 
     parser = argparse.ArgumentParser(description='WaveNet example network')
-    parser.add_argument('--batch_size', type=int, default=BATCH_SIZE,
-                        help='How many wav files to process at once.')
     parser.add_argument('--data_dir', type=str, default=DATA_DIRECTORY,
                         help='The directory containing the VCTK corpus.')
     parser.add_argument('--store_metadata', type=bool, default=False,
@@ -85,7 +81,7 @@ def get_arguments():
     parser.add_argument('--blacklist', type=str, default=BLACKLIST,
                         help='JSON file containing set of file names to be '
                              'ignored while training (sans file extension).')
-    parser.add_argument('--sample_size', type=int, default=SAMPLE_SIZE,
+    parser.add_argument('--max_sample_size', type=int, default=MAX_SAMPLE_SIZE,
                         help='Concatenate and cut audio samples to this many '
                         'samples.')
     parser.add_argument('--l2_regularization_strength', type=float,
@@ -118,9 +114,9 @@ def get_arguments():
                         default=LOCAL_CONDITION_CHANNELS,
                         help='Number of channels in the upsampled local '
                              'condition fed to the audio wavenet.')
-    parser.add_argument('--encoder_layer_count', type=int,
-                        default=ENCODER_LAYER_COUNT,
-                        help='Number of layers in the the text encoder.')
+#    parser.add_argument('--encoder_layer_count', type=int,
+#                        default=ENCODER_LAYER_COUNT,
+#                        help='Number of layers in the the text encoder.')
     return parser.parse_args()
 
 
@@ -202,18 +198,19 @@ def validate_directories(args):
         'restore_from': restore_from
     }
 
-def get_input_batches(gc_enabled, test_interval, reader, batch_size):
-    audio_batch, text_batch = reader.dequeue(batch_size)
+def get_input_batch(gc_enabled, test_interval, reader):
+    audio_batch, text_batch = reader.dequeue()
     gc_id_batch = None
     if gc_enabled:
-        gc_id_batch = reader.dequeue_gc(batch_size)
+        gc_id_batch = reader.dequeue_gc()
 
     test_audio_batch = None
     test_gc_id_batch = None
+    test_text_batch = None
     if test_interval > 0:
-        test_audio_batch, test_text_batch = reader.dequeue_test_audio(1)
+        test_audio_batch, test_text_batch = reader.dequeue_test_audio()
         if gc_enabled:
-            test_gc_id_batch = reader.dequeue_test_gc_id(1)
+            test_gc_id_batch = reader.dequeue_test_gc_id()
     return (audio_batch, text_batch, gc_id_batch, test_audio_batch,
             test_text_batch, test_gc_id_batch)
 
@@ -265,29 +262,31 @@ def main():
             coord,
             sample_rate=wavenet_params['sample_rate'],
             gc_enabled=gc_enabled,
-            sample_size=args.sample_size,
+            max_sample_size=args.max_sample_size,
             test_pattern=wavenet_params['test_pattern'],
             silence_threshold=args.silence_threshold,
             blacklist=blacklist)
 
         (audio_batch, text_batch, gc_id_batch, test_audio_batch,
          test_text_batch, test_gc_id_batch) = \
-            get_input_batches(gc_enabled, test_interval, reader,
-                              args.batch_size)
+            get_input_batch(gc_enabled, test_interval, reader)
 
     # Create text encoder network.
     text_encoder = ConvNetModel(
-        batch_size=args.batch_size,
         encoder_channels=args.encoder_channels,
         histograms=args.histograms,
         output_channels=args.encoder_output_channels,
         local_condition_channels=args.lc_channels,
-        up_sample_rate=UPSAMPLE_RATE,
-        layer_count=args.encoder_layer_count)
+        upsample_rate=UPSAMPLE_RATE,
+        layer_count=27,
+        dilations=[1, 2, 4, 8, 16, 32, 64, 128, 256, 512,
+                   1, 2, 4, 8, 16, 32, 64, 128, 256, 512,
+                   1, 2, 4, 8, 16, 32, 64, 128, 256, 512,
+                   1, 2, 4, 8, 16, 32, 64, 128, 256, 512],
+        gated_linear=False)
 
     # Create network.
     net = WaveNetModel(
-        batch_size=args.batch_size,
         dilations=wavenet_params["dilations"],
         filter_width=wavenet_params["filter_width"],
         residual_channels=wavenet_params["residual_channels"],
@@ -295,29 +294,29 @@ def main():
         skip_channels=wavenet_params["skip_channels"],
         quantization_channels=wavenet_params["quantization_channels"],
         use_biases=wavenet_params["use_biases"],
-        scalar_input=wavenet_params["scalar_input"],
-        initial_filter_width=wavenet_params["initial_filter_width"],
         histograms=args.histograms,
         global_condition_channels=args.gc_channels,
         global_condition_cardinality=reader.gc_category_cardinality,
-        local_condition_channels=args.lc_channels)
+        local_condition_channels=args.lc_channels,
+        ctc_loss=False,
+        gated_linear=False)
 
     if args.l2_regularization_strength == 0:
         args.l2_regularization_strength = None
 
-    lc_batch = text_encoder.upsample(text_batch)
-    test_lc_batch = text_encoder.upsample(test_text_batch)
-#    loss = net.loss(input_batch=audio_batch,
-#                    global_condition_batch=gc_id_batch,
-#                    local_condition_batch=local_condition,
-#                    l2_regularization_strength=args.l2_regularization_strength)
-
+    text_batch = tf.squeeze(text_batch)
+    lc_batch = text_encoder.upsample(text_batch, tf.shape(audio_batch)[0])
+    if test_text_batch is not None:
+        test_text_batch = tf.squeeze(test_text_batch)
+        test_lc_batch = text_encoder.upsample(test_text_batch,
+                                          tf.shape(test_audio_batch)[0])
     loss = net.loss(input_batch=audio_batch,
                     global_condition_batch=gc_id_batch,
                     local_condition_batch=lc_batch,
                     l2_regularization_strength=args.l2_regularization_strength)
 
-    test_loss = net.loss(input_batch=test_audio_batch,
+    if test_text_batch is not None:
+        test_loss = net.loss(input_batch=test_audio_batch,
                          global_condition_batch=test_gc_id_batch,
                          local_condition_batch=test_lc_batch,
                          l2_regularization_strength=
@@ -337,84 +336,86 @@ def main():
     summaries = tf.merge_all_summaries()
 
     # Set up session
-    sess = tf.Session(config=tf.ConfigProto(log_device_placement=False))
-    init = tf.initialize_all_variables()
-    sess.run(init)
+    with tf.Session(config=tf.ConfigProto(log_device_placement=False)) as sess:
+        init = tf.initialize_all_variables()
+        sess.run(init)
 
-    # Saver for storing checkpoints of the model.
-    saver = tf.train.Saver(var_list=tf.trainable_variables())
+        # Saver for storing checkpoints of the model.
+        saver = tf.train.Saver(var_list=tf.trainable_variables())
 
-    try:
-        saved_global_step = load(saver, sess, restore_from)
-        if is_overwritten_training or saved_global_step is None:
-            # The first training step will be saved_global_step + 1,
-            # therefore we put -1 here for new or overwritten trainings.
-            saved_global_step = -1
+        try:
+            saved_global_step = load(saver, sess, restore_from)
+            if is_overwritten_training or saved_global_step is None:
+                # The first training step will be saved_global_step + 1,
+                # therefore we put -1 here for new or overwritten trainings.
+                saved_global_step = -1
 
-    except:
-        print("Something went wrong while restoring checkpoint. "
-              "We will terminate training to avoid accidentally overwriting "
-              "the previous model.")
-        raise
+        except:
+            print("Something went wrong while restoring checkpoint. "
+                  "We will terminate training to avoid accidentally overwriting "
+                  "the previous model.")
+            raise
 
-    threads = tf.train.start_queue_runners(sess=sess, coord=coord)
-    reader.start_threads(sess)
+        #threads = tf.train.start_queue_runners(sess=sess, coord=coord)
+        threads = reader.start_threads(sess)
+        step = None
+        test_loss_value = 0.0
+        try:
+            with coord.stop_on_exception():
+                last_saved_step = saved_global_step
+                for step in range(saved_global_step + 1, args.num_steps):
+                    if coord.should_stop() or reader.please_stop:
+                        raise ValueError("Reader thread requested stop.")
+                    start_time = time.time()
+                    if args.store_metadata and step % 50 == 0:
+                        # Slow run that stores extra information for debugging.
+                        print('Storing metadata')
+                        run_options = tf.RunOptions(
+                            trace_level=tf.RunOptions.FULL_TRACE)
+                        summary, loss_value, _ = sess.run(
+                            [summaries, loss, optim],
+                            options=run_options,
+                            run_metadata=run_metadata)
+                        writer.add_summary(summary, step)
+                        writer.add_run_metadata(run_metadata,
+                                                'step_{:04d}'.format(step))
+                        tl = timeline.Timeline(run_metadata.step_stats)
+                        timeline_path = os.path.join(logdir, 'timeline.trace')
+                        with open(timeline_path, 'w') as f:
+                            f.write(tl.generate_chrome_trace_format(show_memory=True))
+                    else:
+                        summary, loss_value, _ = sess.run([summaries, loss, optim])
+                        writer.add_summary(summary, step)
 
-    step = None
-    test_loss_value = 0.0
-    try:
-        last_saved_step = saved_global_step
-        for step in range(saved_global_step + 1, args.num_steps):
-            if coord.should_stop():
-                break
-            start_time = time.time()
-            if args.store_metadata and step % 50 == 0:
-                # Slow run that stores extra information for debugging.
-                print('Storing metadata')
-                run_options = tf.RunOptions(
-                    trace_level=tf.RunOptions.FULL_TRACE)
-                summary, loss_value, _ = sess.run(
-                    [summaries, loss, optim],
-                    options=run_options,
-                    run_metadata=run_metadata)
-                writer.add_summary(summary, step)
-                writer.add_run_metadata(run_metadata,
-                                        'step_{:04d}'.format(step))
-                tl = timeline.Timeline(run_metadata.step_stats)
-                timeline_path = os.path.join(logdir, 'timeline.trace')
-                with open(timeline_path, 'w') as f:
-                    f.write(tl.generate_chrome_trace_format(show_memory=True))
-            else:
-                summary, loss_value, _ = sess.run([summaries, loss, optim])
-                writer.add_summary(summary, step)
+                    # Print an asterisk only if we've recomputed test loss.
+                    test_computed = ' '
+                    if test_interval > 0 and step % test_interval == 0:
+                        test_steps = wavenet_params["test_steps"]
+                        test_loss_value = compute_test_loss(sess, test_steps,
+                                                            test_loss)
+                        test_computed = '*'
 
-            # Print an asterisk only if we've recomputed test loss.
-            test_computed = ' '
-            if test_interval > 0 and step % test_interval == 0:
-                test_steps = wavenet_params["test_steps"]
-                test_loss_value = compute_test_loss(sess, test_steps,
-                                                    test_loss)
-                test_computed = '*'
 
-            duration = time.time() - start_time
-            print('step {:d} - loss = {:.3f}, last test loss = {:3f},'
-                  ' ({:.3f} sec/step) {}'
-                  .format(step, loss_value, test_loss_value, duration,
-                          test_computed))
+                    duration = time.time() - start_time
+                    print('step {:d} - loss = {:.3f}, last test loss = {:3f},'
+                          ' ({:.3f} sec/step) {}'
+                          .format(step, loss_value, test_loss_value, duration,
+                                  test_computed))
 
-            if step % args.checkpoint_every == 0:
+                    if step % args.checkpoint_every == 0:
+                        save(saver, sess, logdir, step)
+                        last_saved_step = step
+
+        except Exception, e:
+            # Introduce a line break after ^C is displayed so save message
+            # is on its own line.
+            print()
+            coord.request_stop(e)
+        finally:
+            if step > last_saved_step:
                 save(saver, sess, logdir, step)
-                last_saved_step = step
-
-    except KeyboardInterrupt:
-        # Introduce a line break after ^C is displayed so save message
-        # is on its own line.
-        print()
-    finally:
-        if step > last_saved_step:
-            save(saver, sess, logdir, step)
-        coord.request_stop()
-        coord.join(threads)
+            coord.request_stop()
+            coord.join(threads)
 
 
 if __name__ == '__main__':

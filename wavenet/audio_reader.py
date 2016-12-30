@@ -3,12 +3,19 @@ import os
 import random
 import re
 import threading
+import traceback
 
 import librosa
 import numpy as np
 import tensorflow as tf
 
 FILE_PATTERN = r'p([0-9]+)_([0-9]+)\.wav'
+
+
+def ascii_to_array(ascii_list):
+    array = np.array(ascii_list)
+    array = np.reshape(array, (-1, 1))
+    return array
 
 
 def get_category_cardinality(files):
@@ -54,7 +61,7 @@ def find_audio_and_text(corpus_directory,
     wave_files = dict()
     text_files = dict()
 
-    files = find_files(directory)
+    files = find_files(corpus_directory)
     # Files that match the test pattern are used in testing, all other
     # files are used in training.
     test_reg_exp = re.compile(test_pattern)
@@ -65,7 +72,7 @@ def find_audio_and_text(corpus_directory,
     files = new_files
 
     for root, dirnames, filenames in os.walk(corpus_directory):
-        for filename in fnmatch.filter(filenames, pattern):
+        for filename in fnmatch.filter(filenames, "*.wav"):
             wav_file = os.path.join(root, filename)
             (base, _) = os.path.splitext(filename)
             wave_files[base] = wav_file
@@ -89,12 +96,12 @@ def load_generic_audio(directory,
                                                 test_pattern=test_pattern,
                                                 pattern=FILE_PATTERN)
 
-    id_reg_exp = re.compile(test_pattern)
-    print("files length: {}".format(len(files)))
-    for base_name in random_files(audio_dict.keys()):
+    id_reg_exp = re.compile(FILE_PATTERN)
+    for base_name in random_file(audio_dict.keys()):
         not_in_blacklist = blacklist is None or base_name not in blacklist
         also_in_text_dict = base_name in text_dict
         if not_in_blacklist and also_in_text_dict:
+            filename = audio_dict[base_name]
             ids = id_reg_exp.findall(filename)
             if ids is None:
                 # The file name does not match the pattern containing ids, so
@@ -104,7 +111,6 @@ def load_generic_audio(directory,
                 # The file name matches the pattern for containing ids.
                 category_id = int(ids[0][0])
             # load the audio.
-            filename = audio_dict[base_name]
             audio, _ = librosa.load(filename, sr=sample_rate, mono=True)
             audio = audio.reshape(-1, 1)
 
@@ -114,19 +120,9 @@ def load_generic_audio(directory,
                 # Make it lower case, since the VCTK corpus is quite small
                 # and we won't see enough instances of upper case.
                 text = text_file.read().lower()
-                character_list = [ord(achar) for char in text]
+                ascii_list = [ord(achar) for achar in text]
 
-            yield audio, filename, category_id, character_list
-
-
-def trim_silence(audio, threshold):
-    '''Removes silence at the beginning and end of a sample.'''
-    energy = librosa.feature.rmse(audio)
-    frames = np.nonzero(energy > threshold)
-    indices = librosa.core.frames_to_samples(frames)[1]
-
-    # Note: indices can be an empty array, if the whole audio was silence.
-    return audio[indices[0]:indices[-1]] if indices.size else audio[0:0]
+            yield audio, filename, category_id, ascii_list
 
 
 def not_all_have_id(files):
@@ -145,28 +141,30 @@ class AudioReader(object):
     and enqueues them into a TensorFlow queue.'''
 
     def __init__(self,
-                 audio_dir,
+                 corpus_dir,
                  coord,
                  sample_rate,
                  gc_enabled,
-                 sample_size,
+                 max_sample_size,
                  test_pattern=None,
                  silence_threshold=None,
                  queue_size=64,
                  blacklist=None):
-        self.corpus_dir = audio_dir
+        self.please_stop = False
+        self.corpus_dir = corpus_dir
         self.sample_rate = sample_rate
         self.coord = coord
-        self.sample_size = sample_size
+        self.max_sample_size = max_sample_size
         self.silence_threshold = silence_threshold
         self.gc_enabled = gc_enabled
         self.threads = []
         self.test_pattern = test_pattern
         self.sample_placeholder = tf.placeholder(dtype=tf.float32, shape=None)
-        self.text_placeholder = tf.placeholder(dtype=tf.int32, shape=None)
+        self.text_placeholder = tf.placeholder(dtype=tf.int32, shape=(None,1))
+
         self.queue = tf.PaddingFIFOQueue(queue_size,
                                          ['float32', 'int32'],
-                                         shapes=[(None, 1), (None, 1)])
+                                         shapes=[(None, 1), (None,1)])
         self.enqueue = self.queue.enqueue([self.sample_placeholder,
                                           self.text_placeholder])
         self.blacklist = blacklist
@@ -176,10 +174,12 @@ class AudioReader(object):
             self.test_sample_placeholder = tf.placeholder(dtype=tf.float32,
                                                           shape=None)
             self.test_queue = tf.PaddingFIFOQueue(queue_size,
-                                                  ['float32'],
-                                                  shapes=[(None, 1)])
+                                                  ['float32', 'int32'],
+                                                  shapes=[(None, 1), (None,1)])
+            self.test_text_placeholder = tf.placeholder(dtype=tf.int32,
+                                                        shape=(None,1))
             self.test_enqueue = self.test_queue.enqueue(
-                [self.test_sample_placeholder])
+                [self.test_sample_placeholder, self.test_text_placeholder])
 
         if self.gc_enabled:
             self.id_placeholder = tf.placeholder(dtype=tf.int32, shape=())
@@ -198,9 +198,9 @@ class AudioReader(object):
         # TODO Find a better way to check this.
         # Checking inside the AudioReader's thread makes it hard to terminate
         # the execution of the script, so we do it in the constructor for now.
-        files = find_files(audio_dir, blacklist=blacklist)
+        files = find_files(corpus_dir, blacklist=blacklist)
         if not files:
-            raise ValueError("No audio files found in '{}'.".format(audio_dir))
+            raise ValueError("No audio files found in '{}'.".format(corpus_dir))
         if self.gc_enabled and not_all_have_id(files):
             raise ValueError("Global conditioning is enabled, but file names "
                              "do not conform to pattern having id.")
@@ -221,18 +221,18 @@ class AudioReader(object):
         else:
             self.gc_category_cardinality = None
 
-    def dequeue(self, num_elements):
-        audio, text = self.queue.dequeue_many(num_elements)
+    def dequeue(self):
+        audio, text = self.queue.dequeue()
         return audio, text
 
-    def dequeue_gc(self, num_elements):
-        return self.gc_queue.dequeue_many(num_elements)
+    def dequeue_gc(self):
+        return self.gc_queue.dequeue()
 
-    def dequeue_test_audio(self, num_elements):
-        return self.test_queue.dequeue_many(num_elements)
+    def dequeue_test_audio(self):
+        return self.test_queue.dequeue()
 
-    def dequeue_test_gc_id(self, num_elements):
-        return self.test_gc_queue.dequeue_many(num_elements)
+    def dequeue_test_gc_id(self):
+        return self.test_gc_queue.dequeue()
 
     def thread_main(self, sess, is_train_not_test):
         stop = False
@@ -256,37 +256,41 @@ class AudioReader(object):
         try:
             # Go through the dataset multiple times
             while not stop:
-                iterator = load_generic_audio(self.audio_dir,
+                iterator = load_generic_audio(self.corpus_dir,
                                               self.sample_rate,
                                               self.test_pattern,
                                               is_train_not_test,
-                                              self.black_list)
+                                              self.blacklist)
                 for audio, filename, category_id, char_list in iterator:
                     if self.coord.should_stop():
                         stop = True
                         break
 
-                    sess.run(self.enqueue,
-                             feed_dict={self.sample_placeholder: audio,
-                                        self.text_placeholder: char_list})
-                    buffer_ = buffer_[self.sample_size:]
-                    if self.gc_enabled:
-                        sess.run(self.gc_enqueue,
-                                 feed_dict={self.id_placeholder:
-                                            category_id})
+                    # Skip any that are larger than max, as a mechanism for
+                    # limiting memory usage.
+                    if len(audio) < self.max_sample_size:
+                        sess.run(self.enqueue,
+                                 feed_dict={self.sample_placeholder: audio,
+                                            self.text_placeholder:
+                                                  ascii_to_array(char_list)})
+                        if self.gc_enabled:
+                            sess.run(self.gc_enqueue,
+                                     feed_dict={self.id_placeholder:
+                                                category_id})
+                    else:
+                        print("Skipping {}: audio length={}".format(
+                            filename, len(audio)))
 
-        except Exception, e:
-            # Report exceptions to the coordinator.
-            self.coord.request_stop(e)
-        finally:
-            # Terminate as usual.  It is innocuous to request stop twice.
+        except:
+            self.please_stop = True
             self.coord.request_stop()
-            self.coord.join(threads)
+            print("Audio reader:")
+            traceback.print_exc()
 
     def _start_thread(self, sess, is_train_not_test):
         thread = threading.Thread(target=self.thread_main,
                                   args=(sess, is_train_not_test,))
-        thread.daemon = True  # Thread will close when parent quits.
+        #thread.daemon = True  # Thread will close when parent quits.
         thread.start()
         self.threads.append(thread)
 
