@@ -356,8 +356,8 @@ def main():
                   "the previous model.")
             raise
 
-        #threads = tf.train.start_queue_runners(sess=sess, coord=coord)
-        threads = reader.start_threads(sess)
+        threads = tf.train.start_queue_runners(sess=sess, coord=coord)
+        threads.extend(reader.start_threads(sess))
         step = None
         test_loss_value = 0.0
         try:

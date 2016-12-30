@@ -284,15 +284,20 @@ class AudioReader(object):
         except:
             self.please_stop = True
             self.coord.request_stop()
+            self.queue.close()
+            self.gc_queue.close()
+            self.test_queue.close()
+            self.test_gc_queue.close()
             print("Audio reader:")
             traceback.print_exc()
 
     def _start_thread(self, sess, is_train_not_test):
         thread = threading.Thread(target=self.thread_main,
                                   args=(sess, is_train_not_test,))
-        #thread.daemon = True  # Thread will close when parent quits.
+        thread.daemon = True  # Thread will close when parent quits.
         thread.start()
         self.threads.append(thread)
+
 
     def start_threads(self, sess, n_threads=1):
         for _ in range(n_threads):
