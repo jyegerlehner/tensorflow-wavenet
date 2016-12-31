@@ -249,7 +249,7 @@ def main():
     # Create coordinator.
     coord = tf.train.Coordinator()
     test_interval = wavenet_params['test_interval']
-
+    do_test = test_interval > 0
     # Load raw waveform from VCTK corpus.
     with tf.name_scope('create_inputs'):
         # Allow silence trimming to be skipped by specifying a threshold near
@@ -265,7 +265,8 @@ def main():
             max_sample_size=args.max_sample_size,
             test_pattern=wavenet_params['test_pattern'],
             silence_threshold=args.silence_threshold,
-            blacklist=blacklist)
+            blacklist=blacklist,
+            do_test=do_test)
 
         (audio_batch, text_batch, gc_id_batch, test_audio_batch,
          test_text_batch, test_gc_id_batch) = \
@@ -363,8 +364,8 @@ def main():
         try:
             last_saved_step = saved_global_step
             for step in range(saved_global_step + 1, args.num_steps):
-                if coord.should_stop() or reader.please_stop:
-                    raise ValueError("Reader thread requested stop.")
+                if coord.should_stop():
+                    break
                 start_time = time.time()
                 if args.store_metadata and step % 50 == 0:
                     # Slow run that stores extra information for debugging.
@@ -414,7 +415,7 @@ def main():
             if step > last_saved_step:
                 save(saver, sess, logdir, step)
             coord.request_stop()
-            coord.join(threads)
+            #coord.join(threads)
 
 
 if __name__ == '__main__':
