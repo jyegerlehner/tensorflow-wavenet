@@ -10,19 +10,21 @@ import librosa
 import numpy as np
 import tensorflow as tf
 
-from wavenet import WaveNetModel, mu_law_decode, mu_law_encode, audio_reader
+from wavenet import (WaveNetModel, mu_law_decode, mu_law_encode, audio_reader,
+                     ConvNetModel)
 
 SAMPLES = 16000
 TEMPERATURE = 1.0
 LOGDIR = './logdir'
 WINDOW = 8000
 WAVENET_PARAMS = './wavenet_params.json'
+ENCODER_PARAMS = './encoder_params.json'
 SAVE_EVERY = None
 SILENCE_THRESHOLD = 0.1
-ENCODER_CHANNELS = 48
-ENCODER_OUTPUT_CHANNELS = 512
-LOCAL_CONDITION_CHANNELS = 32
-UPSAMPLE_RATE = 1000  # Typical number of audio samples per
+#ENCODER_CHANNELS = 48
+#ENCODER_OUTPUT_CHANNELS = 512
+#LOCAL_CONDITION_CHANNELS = 32
+#UPSAMPLE_RATE = 1000  # Typical number of audio samples per
 DURATION_RATIO = 1.0
 
 
@@ -73,6 +75,11 @@ def get_arguments():
         default=WAVENET_PARAMS,
         help='JSON file with the network parameters')
     parser.add_argument(
+        '--encoder_params',
+        type=str,
+        default=ENCODER_PARAMS,
+        help='JSON file with the encoder parameters.')
+    parser.add_argument(
         '--wav_out_path',
         type=str,
         default=None,
@@ -108,27 +115,27 @@ def get_arguments():
         type=int,
         default=None,
         help='ID of category to generate, if globally conditioned.')
-    parser.add_argument(
-        '--encoder_channels', type=int,
-        default=ENCODER_CHANNELS,
-        help='Number of channels in the text encoder net.')
-    parser.add_argument(
-        '--encoder_output_channels',
-        type=int,
-        default=ENCODER_OUTPUT_CHANNELS,
-        help='Number of output channels from the text encoder '
-             'net.')
-    parser.add_argument(
-        '--lc_channels',
-        type=int,
-        default=LOCAL_CONDITION_CHANNELS,
-        help='Number of channels in the upsampled local '
-             'condition fed to the audio wavenet.')
-    parser.add_argument(
-        '--encoder_layer_count',
-        type=int,
-        default=ENCODER_LAYER_COUNT,
-        help='Number of layers in the the text encoder.')
+#    parser.add_argument(
+#        '--encoder_channels', type=int,
+#        default=ENCODER_CHANNELS,
+#        help='Number of channels in the text encoder net.')
+#    parser.add_argument(
+#        '--encoder_output_channels',
+#        type=int,
+#        default=ENCODER_OUTPUT_CHANNELS,
+#        help='Number of output channels from the text encoder '
+#             'net.')
+#    parser.add_argument(
+#        '--lc_channels',
+#        type=int,
+#        default=LOCAL_CONDITION_CHANNELS,
+#        help='Number of channels in the upsampled local '
+#             'condition fed to the audio wavenet.')
+#    parser.add_argument(
+#        '--encoder_layer_count',
+#        type=int,
+#        default=ENCODER_LAYER_COUNT,
+#        help='Number of layers in the the text encoder.')
     parser.add_argument(
         '--text',
         type=str,
@@ -161,16 +168,18 @@ def text_to_ascii(text):
 
 
 def main():
+    duration_ratio = 1.0
     args = get_arguments()
     started_datestring = "{0:%Y-%m-%dT%H-%M-%S}".format(datetime.now())
     logdir = os.path.join(args.logdir, 'generate', started_datestring)
     with open(args.wavenet_params, 'r') as config_file:
         wavenet_params = json.load(config_file)
+    with open(args.encoder_params, 'r') as config_file:
+        encoder_params = json.load(config_file)
 
     sess = tf.Session()
 
     net = WaveNetModel(
-        batch_size=1,
         dilations=wavenet_params['dilations'],
         filter_width=wavenet_params['filter_width'],
         residual_channels=wavenet_params['residual_channels'],
@@ -178,37 +187,36 @@ def main():
         quantization_channels=wavenet_params['quantization_channels'],
         skip_channels=wavenet_params['skip_channels'],
         use_biases=wavenet_params['use_biases'],
-        scalar_input=wavenet_params['scalar_input'],
-        initial_filter_width=wavenet_params['initial_filter_width'],
+        histograms=False,
         global_condition_channels=args.gc_channels,
         global_condition_cardinality=args.gc_cardinality,
-        residual_postproc=wavenet_params["residual_postproc"])
+        local_condition_channels=encoder_params["local_condition_channels"])
 
     text_encoder = ConvNetModel(
-        batch_size=1
-        encoder_channels=args.encoder_channels,
-        histograms=args.histograms,
-        output_channels=args.encoder_output_channels,
-        local_condition_channels=args.lc_channels,
-        up_sample_rate=UPSAMPLE_RATE,
-        layer_count=args.encoder_layer_count,
-        layer_count=18,
-        dilations=[1, 2, 4, 8, 16, 32, 64, 128, 256,
-                   1, 2, 4, 8, 16, 32, 64, 128, 256,
-                   1, 2, 4, 8, 16, 32, 64, 128, 256],
+        encoder_channels=encoder_params["encoder_channels"],
+        histograms=False,
+        output_channels=encoder_params['encoder_output_channels'],
+        local_condition_channels=encoder_params['local_condition_channels'],
+        upsample_rate=encoder_params['median_upsample_rate'],
+        dilations=encoder_params['dilations'],
         gated_linear=False)
 
     text = args.text
     duration_in_characters = len(text)
-    duration_in_samples = duration_in_characters * MEDIAN_CHAR_SAMPLES * \
+    duration_in_samples = duration_in_characters * \
+                          encoder_params['median_upsample_rate'] * \
                           duration_ratio
     duration_in_samples = int(duration_in_samples)
 
     samples = tf.placeholder(tf.int32)
     lc_placeholder = tf.placeholder(dtype=tf.float32)
-    ascii_placeholder = tf.placeholder(dtype=tf.int32)
+    # ascii_placeholder = tf.placeholder(dtype=tf.int32)
 
-    local_conditions = text_encoder.upsample(text, duration_in_samples)
+    # Reshape the text to N characters x 1.
+    ascii = [ord(achar) for achar in text]
+    ascii = np.reshape(ascii, [-1])
+
+    local_conditions = text_encoder.upsample(ascii, duration_in_samples)
     next_sample = net.predict_proba(samples, args.gc_id, lc_placeholder)
 
     variables_to_restore = {
@@ -223,20 +231,19 @@ def main():
     decode = mu_law_decode(samples, quantization_channels)
     waveform = np.random.randint(quantization_channels, size=(1,)).tolist()
 
-    ascii = text_to_ascii(text)
-
     # First generate the local conditions from the text.
-    lc = sess.run(local_conditions,
-                  feed_dict={ascii_placeholder: ascii})
+#    lc = sess.run(local_conditions,
+#                  feed_dict={ascii_placeholder: ascii})
+    lc = sess.run(local_conditions)
 
     last_sample_timestamp = datetime.now()
-    for step in range(1,args.samples):
+    for step in range(1,duration_in_samples):
 #        if len(waveform) > args.window:
 #            window = waveform[-args.window:]
 #        else:
 #            window = waveform
         receptive_field = net.receptive_field()
-        if i >= receptive_field:
+        if step >= receptive_field:
             window = waveform[step-receptive_field:step]
             lc_window = lc[:,step-receptive_field:step,:]
         else:
@@ -262,14 +269,14 @@ def main():
             np.testing.assert_allclose(prediction, scaled_prediction, atol=1e-5, err_msg='Prediction scaling at temperature=1.0 is not working as intended.')
 
         sample = np.random.choice(
-            np.arange(quantization_channels), p=scaled_prediction)
+            np.arange(net.softmax_channels), p=scaled_prediction)
         waveform.append(sample)
 
         # Show progress only once per second.
         current_sample_timestamp = datetime.now()
         time_since_print = current_sample_timestamp - last_sample_timestamp
         if time_since_print.total_seconds() > 1.:
-            print('Sample {:3<d}/{:3<d}'.format(step + 1, args.samples),
+            print('Sample {:3<d}/{:3<d}'.format(step + 1, duration_in_samples),
                   end='\r')
             last_sample_timestamp = current_sample_timestamp
 

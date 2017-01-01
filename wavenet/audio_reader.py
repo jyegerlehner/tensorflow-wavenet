@@ -4,8 +4,7 @@ import random
 import re
 import threading
 import traceback
-
-import librosa
+import soundfile as sf
 import numpy as np
 import tensorflow as tf
 
@@ -111,7 +110,8 @@ def load_generic_audio(directory,
                 # The file name matches the pattern for containing ids.
                 category_id = int(ids[0][0])
             # load the audio.
-            audio, _ = librosa.load(filename, sr=sample_rate, mono=True)
+            audio, _ = sf.read(filename)
+            audio = audio.astype(np.float32)
             audio = audio.reshape(-1, 1)
 
             # load the text
@@ -149,8 +149,9 @@ class AudioReader(object):
                  test_pattern=None,
                  silence_threshold=None,
                  queue_size=64,
-                 blacklist=None):
-        self.please_stop = False
+                 blacklist=None,
+                 do_test=False):
+        self.do_test = do_test
         self.corpus_dir = corpus_dir
         self.sample_rate = sample_rate
         self.coord = coord
@@ -168,8 +169,6 @@ class AudioReader(object):
         self.enqueue = self.queue.enqueue([self.sample_placeholder,
                                           self.text_placeholder])
         self.blacklist = blacklist
-        self.do_test = len(test_pattern) > 0 if test_pattern is not None \
-            else False
         if self.do_test:
             self.test_sample_placeholder = tf.placeholder(dtype=tf.float32,
                                                           shape=None)
@@ -282,17 +281,21 @@ class AudioReader(object):
                             filename, len(audio)))
 
         except:
-            self.please_stop = True
-            self.coord.request_stop()
             print("Audio reader:")
             traceback.print_exc()
+            self.coord.request_stop()
+            self.queue.close()
+            self.gc_queue.close()
+            self.test_queue.close()
+            self.test_gc_queue.close()
 
     def _start_thread(self, sess, is_train_not_test):
         thread = threading.Thread(target=self.thread_main,
                                   args=(sess, is_train_not_test,))
-        #thread.daemon = True  # Thread will close when parent quits.
+        thread.daemon = True  # Thread will close when parent quits.
         thread.start()
         self.threads.append(thread)
+
 
     def start_threads(self, sess, n_threads=1):
         for _ in range(n_threads):

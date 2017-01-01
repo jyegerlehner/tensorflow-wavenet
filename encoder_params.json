@@ -1,0 +1,9 @@
+{
+    "encoder_channels": 12,
+    "encoder_output_channels": 64,
+    "local_condition_channels": 16,
+    "median_upsample_rate": 1000,
+    "dilations": [1, 2, 4, 8, 16, 32, 64, 128, 256, 512,
+                  1, 2, 4, 8, 16, 32, 64, 128, 256, 512,
+                  1, 2, 4, 8, 16, 32, 64, 128, 256, 512]
+}

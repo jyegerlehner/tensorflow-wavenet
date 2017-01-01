@@ -37,7 +37,7 @@ class ConvNetModel(object):
                  output_channels,
                  local_condition_channels,
                  upsample_rate,
-                 layer_count,
+                 layer_count=None,
                  dilations=None,
                  gated_linear=False):
         self.encoder_channels = encoder_channels
@@ -45,7 +45,13 @@ class ConvNetModel(object):
         self.output_channels = output_channels
         self.local_condition_channels = local_condition_channels
         self.upsample_rate = upsample_rate
-        self.layer_count = layer_count
+        if layer_count is None:
+            self.layer_count = len(dilations)
+        elif dilations is not None:
+            assert(len(dilations) == layer_count)
+            self.layer_count=layer_count
+        else:
+            assert(False)
         self.skip_cuts = []
         self.output_shapes = []
         self.output_width = None
