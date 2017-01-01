@@ -582,8 +582,8 @@ class WaveNetModel(object):
 
         return embedding
 
-    def predict_proba(self, waveform, global_condition=None, name='wavenet',
-                      local_condition=None):
+    def predict_proba(self, waveform, global_condition=None,
+                      local_condition=None, name='wavenet'):
         '''Computes the probability distribution of the next sample based on
         all samples in the input waveform.
         If you want to generate audio by feeding the output of the network back

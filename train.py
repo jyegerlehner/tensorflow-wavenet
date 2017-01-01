@@ -25,6 +25,7 @@ CHECKPOINT_EVERY = 50
 NUM_STEPS = int(1e5)
 LEARNING_RATE = 1e-3
 WAVENET_PARAMS = './wavenet_params.json'
+ENCODER_PARAMS = './encoder_params.json'
 STARTED_DATESTRING = "{0:%Y-%m-%dT%H-%M-%S}".format(datetime.now())
 MAX_SAMPLE_SIZE = 120000
 L2_REGULARIZATION_STRENGTH = 0
@@ -32,10 +33,10 @@ SILENCE_THRESHOLD = 0.3
 EPSILON = 0.001
 MOMENTUM = 0.9
 BLACKLIST='./blacklist.json'
-ENCODER_CHANNELS = 12
-ENCODER_OUTPUT_CHANNELS = 64
-LOCAL_CONDITION_CHANNELS = 16
-UPSAMPLE_RATE = 1000  # Typical number of audio samples per character
+#ENCODER_CHANNELS = 12
+#ENCODER_OUTPUT_CHANNELS = 64
+#LOCAL_CONDITION_CHANNELS = 16
+#UPSAMPLE_RATE = 1000  # Typical number of audio samples per character
 
 
 def get_arguments():
@@ -78,6 +79,8 @@ def get_arguments():
                         help='Learning rate for training.')
     parser.add_argument('--wavenet_params', type=str, default=WAVENET_PARAMS,
                         help='JSON file with the network parameters.')
+    parser.add_argument('--encoder_params', type=str, default=ENCODER_PARAMS,
+                        help='JSON file with the encoder parameters.')
     parser.add_argument('--blacklist', type=str, default=BLACKLIST,
                         help='JSON file containing set of file names to be '
                              'ignored while training (sans file extension).')
@@ -103,20 +106,6 @@ def get_arguments():
                          help='Whether to store histogram summaries.')
     parser.add_argument('--gc_channels', type=int, default=None,
                         help='Number of global condition channels.')
-    parser.add_argument('--encoder_channels', type=int,
-                        default=ENCODER_CHANNELS,
-                        help='Number of channels in the text encoder net.')
-    parser.add_argument('--encoder_output_channels', type=int,
-                        default=ENCODER_OUTPUT_CHANNELS,
-                        help='Number of output channels from the text encoder '
-                             'net.')
-    parser.add_argument('--lc_channels', type=int,
-                        default=LOCAL_CONDITION_CHANNELS,
-                        help='Number of channels in the upsampled local '
-                             'condition fed to the audio wavenet.')
-#    parser.add_argument('--encoder_layer_count', type=int,
-#                        default=ENCODER_LAYER_COUNT,
-#                        help='Number of layers in the the text encoder.')
     return parser.parse_args()
 
 
@@ -241,6 +230,8 @@ def main():
 
     with open(args.wavenet_params, 'r') as f:
         wavenet_params = json.load(f)
+    with open(args.encoder_params, 'r') as f:
+        encoder_params = json.load(f)
 
     print("test_pattern:", wavenet_params["test_pattern"])
     with open(args.blacklist, 'r') as f:
@@ -274,16 +265,12 @@ def main():
 
     # Create text encoder network.
     text_encoder = ConvNetModel(
-        encoder_channels=args.encoder_channels,
+        encoder_channels=encoder_params["encoder_channels"],
         histograms=args.histograms,
-        output_channels=args.encoder_output_channels,
-        local_condition_channels=args.lc_channels,
-        upsample_rate=UPSAMPLE_RATE,
-        layer_count=27,
-        dilations=[1, 2, 4, 8, 16, 32, 64, 128, 256, 512,
-                   1, 2, 4, 8, 16, 32, 64, 128, 256, 512,
-                   1, 2, 4, 8, 16, 32, 64, 128, 256, 512,
-                   1, 2, 4, 8, 16, 32, 64, 128, 256, 512],
+        output_channels=encoder_params['encoder_output_channels'],
+        local_condition_channels=encoder_params['local_condition_channels'],
+        upsample_rate=encoder_params['median_upsample_rate'],
+        dilations=encoder_params['dilations'],
         gated_linear=False)
 
     # Create network.
@@ -298,7 +285,7 @@ def main():
         histograms=args.histograms,
         global_condition_channels=args.gc_channels,
         global_condition_cardinality=reader.gc_category_cardinality,
-        local_condition_channels=args.lc_channels,
+        local_condition_channels=encoder_params["local_condition_channels"],
         ctc_loss=False,
         gated_linear=False)
 
