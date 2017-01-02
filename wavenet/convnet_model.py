@@ -52,6 +52,8 @@ class ConvNetModel(object):
             self.layer_count=layer_count
         else:
             assert(False)
+
+        print("self.layer_count:{}".format(self.layer_count))
         self.skip_cuts = []
         self.output_shapes = []
         self.output_width = None
@@ -186,7 +188,7 @@ class ConvNetModel(object):
             out = tf.tanh(conv_filter) * tf.sigmoid(conv_gate)
 
         self.output_shapes.append(tf.shape(out))
-        skip_cut = (tf.shape(out)[1] - output_width) / 2
+        skip_cut = (tf.shape(out)[1] - output_width) // 2
 
         self.skip_cuts.append(skip_cut)
 
