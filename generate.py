@@ -168,8 +168,8 @@ def text_to_ascii(text):
 
 
 def main():
-    duration_ratio = 1.0
     args = get_arguments()
+    duration_ratio = args.duration_ratio
     started_datestring = "{0:%Y-%m-%dT%H-%M-%S}".format(datetime.now())
     logdir = os.path.join(args.logdir, 'generate', started_datestring)
     with open(args.wavenet_params, 'r') as config_file:

@@ -1,9 +1,13 @@
 {
-    "encoder_channels": 12,
-    "encoder_output_channels": 64,
-    "local_condition_channels": 32,
+    "encoder_channels": 16,
+    "encoder_output_channels": 128,
+    "local_condition_channels": 48,
     "median_upsample_rate": 1000,
     "dilations": [1, 2, 4, 8, 16, 32, 64, 128, 256, 512,
+                  1, 2, 4, 8, 16, 32, 64, 128, 256, 512,
+                  1, 2, 4, 8, 16, 32, 64, 128, 256, 512,
+                  1, 2, 4, 8, 16, 32, 64, 128, 256, 512,
+                  1, 2, 4, 8, 16, 32, 64, 128, 256, 512,
                   1, 2, 4, 8, 16, 32, 64, 128, 256, 512,
                   1, 2, 4, 8, 16, 32, 64, 128, 256, 512,
                   1, 2, 4, 8, 16, 32, 64, 128, 256, 512]
