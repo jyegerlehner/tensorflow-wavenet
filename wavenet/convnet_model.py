@@ -63,6 +63,7 @@ class ConvNetModel(object):
         self.embedding_shape = None
         self.text_shape = None
         self.gated_linear = gated_linear
+        self.sample_density = None
 
         self.variables = self._create_variables()
 
@@ -275,11 +276,12 @@ class ConvNetModel(object):
         with tf.name_scope('upsampling'):
 
             # Number of samples per character.
-            sample_density = tf.cast(audio_length, dtype=tf.float32) /  \
+            self.sample_density = tf.cast(audio_length, dtype=tf.float32) /  \
                 tf.cast(self.text_shape[0], dtype=tf.float32)
 
             # Number of samples we've currently got if we preserve density.
-            number_samples = sample_density * tf.cast(tf.shape(embedding)[1], dtype=tf.float32)
+            number_samples = self.sample_density * tf.cast(tf.shape(embedding)[1],
+                                                           dtype=tf.float32)
             number_samples = tf.cast(tf.ceil(number_samples), dtype=tf.int32)
 
             # Reshape so we can use image resize on it: height = 1

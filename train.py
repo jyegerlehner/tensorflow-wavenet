@@ -359,8 +359,8 @@ def main():
                     print('Storing metadata')
                     run_options = tf.RunOptions(
                         trace_level=tf.RunOptions.FULL_TRACE)
-                    summary, loss_value, _ = sess.run(
-                        [summaries, loss, optim],
+                    summary, loss_value, _, sample_density = sess.run(
+                        [summaries, loss, optim, text_encoder.sample_density],
                         options=run_options,
                         run_metadata=run_metadata)
                     writer.add_summary(summary, step)
@@ -371,7 +371,8 @@ def main():
                     with open(timeline_path, 'w') as f:
                         f.write(tl.generate_chrome_trace_format(show_memory=True))
                 else:
-                    summary, loss_value, _ = sess.run([summaries, loss, optim])
+                    summary, loss_value, _, sample_density = sess.run([summaries,
+                        loss, optim, text_encoder.sample_density])
                     writer.add_summary(summary, step)
 
                 # Print an asterisk only if we've recomputed test loss.
@@ -385,9 +386,9 @@ def main():
 
                 duration = time.time() - start_time
                 print('step {:d} - loss = {:.3f}, last test loss = {:3f},'
-                      ' ({:.3f} sec/step) {}'
+                      ' ({:.3f} sec/step), samp density = {:2} {}'
                       .format(step, loss_value, test_loss_value, duration,
-                              test_computed))
+                              sample_density, test_computed))
 
                 if step % args.checkpoint_every == 0:
                     save(saver, sess, logdir, step)
