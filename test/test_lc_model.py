@@ -126,12 +126,12 @@ class TestLCNet(tf.test.TestCase):
             histograms=False,
             output_channels=TEXT_ENCODER_OUTPUT_CHANNELS,
             local_condition_channels=LOCAL_CONDITION_CHANNELS,
-            upsample_rate=UPSAMPLE_RATE,
-            layer_count=18,
+            layer_count=None,
             dilations=[1, 2, 4, 8, 16, 32, 64, 128, 256,
                        1, 2, 4, 8, 16, 32, 64, 128, 256,
                        1, 2, 4, 8, 16, 32, 64, 128, 256],
-            gated_linear=False)
+            gated_linear=False,
+            density_conditioned=True)
 
         self.audio_placeholder = tf.placeholder(dtype=tf.float32)
         self.gc_placeholder = tf.placeholder(dtype=tf.int32)  \

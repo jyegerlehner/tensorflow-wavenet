@@ -14,8 +14,6 @@ SAMPLE_RATE = 16000
 
 ''' Computes the number of samples and the number of text characters
     corresponding to each audio sample in the corpus.'''
-
-
 def get_arguments():
     parser = argparse.ArgumentParser(description='Strip silence from audio')
     parser.add_argument('--corpus_dir', type=str, default=CORPUS_DIR,

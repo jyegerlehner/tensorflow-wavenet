@@ -199,7 +199,8 @@ def main():
         local_condition_channels=encoder_params['local_condition_channels'],
         upsample_rate=encoder_params['median_upsample_rate'],
         dilations=encoder_params['dilations'],
-        gated_linear=False)
+        gated_linear=False,
+        density_conditioned=True)
 
     text = args.text
     duration_in_characters = len(text)

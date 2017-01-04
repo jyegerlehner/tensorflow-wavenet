@@ -2,6 +2,9 @@ from __future__ import division
 
 import tensorflow as tf
 
+MIN_SAMPLE_DENSITY = 500.0
+MAX_SAMPLE_DENSITY = 2000.0
+DENSITY_SPAN = MAX_SAMPLE_DENSITY - MIN_SAMPLE_DENSITY
 
 def create_adam_optimizer(learning_rate, momentum):
     return tf.train.AdamOptimizer(learning_rate=learning_rate,
@@ -22,6 +25,18 @@ def create_rmsprop_optimizer(learning_rate, momentum):
 optimizer_factory = {'adam': create_adam_optimizer,
                      'sgd': create_sgd_optimizer,
                      'rmsprop': create_rmsprop_optimizer}
+
+def clamp(val, min, max):
+    val = tf.maximum(val, min)
+    val = tf.minimum(val, max)
+    return val
+
+
+def quantize_sample_density(density, quant_levels):
+    density = clamp(density, MIN_SAMPLE_DENSITY, MAX_SAMPLE_DENSITY)
+    ratio = (density - MIN_SAMPLE_DENSITY) / DENSITY_SPAN
+    quant = tf.cast(tf.floor(ratio*quant_levels), dtype=tf.int32)
+    return quant
 
 
 def time_to_batch(value, dilation, name=None):

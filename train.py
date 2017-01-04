@@ -36,7 +36,6 @@ BLACKLIST='./blacklist.json'
 #ENCODER_CHANNELS = 12
 #ENCODER_OUTPUT_CHANNELS = 64
 #LOCAL_CONDITION_CHANNELS = 16
-#UPSAMPLE_RATE = 1000  # Typical number of audio samples per character
 
 
 def get_arguments():
@@ -269,9 +268,9 @@ def main():
         histograms=args.histograms,
         output_channels=encoder_params['encoder_output_channels'],
         local_condition_channels=encoder_params['local_condition_channels'],
-        upsample_rate=encoder_params['median_upsample_rate'],
         dilations=encoder_params['dilations'],
-        gated_linear=False)
+        gated_linear=False,
+        density_conditioned=True)
 
     # Create network.
     net = WaveNetModel(
