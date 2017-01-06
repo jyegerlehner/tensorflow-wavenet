@@ -282,8 +282,6 @@ class WaveNetModel(object):
 
         if global_condition_batch is not None:
             weights_gc_filter = variables['gc_filtweights']
-            print("gc batch shape:{}".format(global_condition_batch.get_shape()))
-            print("weights gc shape:{}".format(weights_gc_filter.get_shape()))
             conv_filter = conv_filter + tf.nn.conv1d(global_condition_batch,
                                                      weights_gc_filter,
                                                      stride=1,

@@ -1,6 +1,7 @@
 import numpy as np
 import tensorflow as tf
 from .ops import quantize_sample_density
+from .paramspec import create_stored_vars, StoredParm, ComputedParm, ParamTree
 
 DENSITY_QUANT_LEVELS = 50
 CHARACTER_CARDINALITY = 256
@@ -80,119 +81,107 @@ class ConvNetModel(object):
             size = max_dilation*2 + (num_stacks-1)*(max_dilation*2-1)
             return size
 
+    def create_param_specs(self):
+        t = ParamTree('encoder_convnet')
+        c = t.add_child('embeddings')
+        c.add_param(StoredParm(name='text_embedding',
+                               shape=[CHARACTER_CARDINALITY,
+                                      self.encoder_channels],
+                               kind='embedding'))
+        c.add_param(StoredParm(name='density_embedding',
+                               shape=[DENSITY_QUANT_LEVELS,
+                                      self.encoder_channels],
+                               kind='embedding'))
+
+        c = t.add_child('layer_stack')
+        for layer in range(self.layer_count):
+            l = c.add_child('layer{}'.format(layer))
+            l.add_param(StoredParm(name='filter',
+                                    shape=[FILTER_WIDTH,
+                                           self.encoder_channels,
+                                           self.encoder_channels],
+                                    kind='filter'))
+            l.add_param(StoredParm(name='gate',
+                                   shape=[FILTER_WIDTH,
+                                          self.encoder_channels,
+                                          self.encoder_channels],
+                                   kind='filter'))
+            l.add_param(StoredParm(name='skip',
+                                   shape=[1,
+                                          self.encoder_channels,
+                                          self.output_channels],
+                                   kind='filter'))
+            l.add_param(StoredParm(name='filter_bias',
+                                   shape=[self.encoder_channels],
+                                   kind='bias'))
+            l.add_param(StoredParm(name='gate_bias',
+                                   shape=[self.encoder_channels],
+                                   kind='bias'))
+            if self.density_conditioned:
+                l.add_param(StoredParm(name='sd_filt',
+                                       shape=[1,
+                                              self.encoder_channels,
+                                              self.encoder_channels],
+                                       kind='filter'))
+                l.add_param(StoredParm(name='sd_gate',
+                                       shape=[1,
+                                              self.encoder_channels,
+                                              self.encoder_channels],
+                                       kind='filter'))
+                l.add_param(StoredParm(name='sd_filt_bias',
+                                       shape=[self.encoder_channels],
+                                       kind='bias'))
+                l.add_param(StoredParm(name='sd_gate_bias',
+                                       shape=[self.encoder_channels],
+                                       kind='bias'))
+            if layer != self.layer_count-1:
+                l.add_param(StoredParm(name='dense',
+                                       shape=[1,
+                                              self.encoder_channels,
+                                              self.encoder_channels],
+                                       kind='filter'))
+                l.add_param(StoredParm(name='dense_bias',
+                                       shape=[self.encoder_channels],
+                                       kind='bias'))
+
+        c = t.add_child('postprocessing')
+        c.add_param(StoredParm(name='postprocess1',
+                               shape=[1,
+                                      self.output_channels,
+                                      self.output_channels],
+                               kind='filter'))
+        c.add_param(StoredParm(name='postprocess2',
+                               shape=[1,
+                                      self.output_channels,
+                                      self.output_channels],
+                               kind='filter'))
+        c.add_param(StoredParm(name='bias1',
+                               shape=[self.output_channels],
+                               kind='bias'))
+        c.add_param(StoredParm(name='bias2',
+                               shape=[self.output_channels],
+                               kind='bias'))
+        c.add_param(StoredParm(name='lc_proj_filter',
+                               shape=[1,
+                                      self.output_channels,
+                                      self.local_condition_channels],
+                               kind='filter'))
+        return t
+
     def _create_variables(self):
-        var = dict()
-        with tf.variable_scope('encoder_convnet'):
-            with tf.variable_scope('embeddings'):
-                layer = dict()
-                layer['text_embedding'] = create_embedding_table(
-                    'text_embedding',
-                    [CHARACTER_CARDINALITY, self.encoder_channels])
-                if self.density_conditioned:
-                    layer['density_embedding'] = create_embedding_table(
-                        'density_embedding',
-                        [DENSITY_QUANT_LEVELS, self.encoder_channels])
-                var['embeddings'] = layer
-            var['layer_stack'] = []
-            with tf.variable_scope('layer_stack'):
-                for i in range(self.layer_count):
-                    with tf.variable_scope('layer{}'.format(i)):
-                        current = dict()
-                        current['filter'] = create_variable(
-                            'filter',
-                            [FILTER_WIDTH,
-                             self.encoder_channels,
-                             self.encoder_channels])
-                        current['gate'] = create_variable(
-                            'gate',
-                            [FILTER_WIDTH,
-                             self.encoder_channels,
-                             self.encoder_channels])
-                        current['skip'] = create_variable(
-                            'skip',
-                            [1,
-                             self.encoder_channels,
-                             self.output_channels])
-                        current['filter_bias'] = create_bias_variable(
-                            'filter_bias',
-                            [self.encoder_channels])
-                        current['gate_bias'] = create_bias_variable(
-                            'gate_bias',
-                            [self.encoder_channels])
-
-                        if self.density_conditioned:
-                            current['sd_filt'] = create_variable(
-                                'sd_filt',
-                                [1, self.encoder_channels,
-                                 self.encoder_channels])
-                            current['sd_gate'] = create_variable(
-                                'sd_gate',
-                                [1, self.encoder_channels,
-                                 self.encoder_channels])
-                            current['sd_filt_bias'] = create_bias_variable(
-                                'sd_filt_bias',
-                                [self.encoder_channels])
-                            current['sd_gate_bias'] = create_bias_variable(
-                                'sd_gate_bias',
-                                [self.encoder_channels])
-
-                        if i != self.layer_count - 1:
-                            current['dense'] = create_variable(
-                                'dense',
-                                [1,
-                                 self.encoder_channels,
-                                 self.encoder_channels])
-                            current['dense_bias'] = create_bias_variable(
-                                'dense_bias',
-                                [self.encoder_channels])
-                        var['layer_stack'].append(current)
-
-            with tf.variable_scope('postprocessing'):
-                current = dict()
-                current['postprocess1'] = create_variable(
-                    'postprocess1',
-                    [1, self.output_channels, self.output_channels])
-                current['postprocess2'] = create_variable(
-                    'postprocess2',
-                    [1, self.output_channels, self.output_channels])
-                current['bias1'] = create_bias_variable(
-                    'bias1', [self.output_channels], value=0.0)
-                current['bias2'] = create_bias_variable(
-                    'bias2', [self.output_channels], value=0.0)
-                current['projection_filter'] = create_variable(
-                    'lc_proj_filter',
-                    [1,
-                     self.output_channels,
-                     self.local_condition_channels])
-
-                var['postprocessing'] = current
-
-            with tf.variable_scope('upsampling'):
-                # filter for tf.nn.conv2d_transpose, with height = 1 to achieve
-                # a 1d deconv.
-                current = dict()
-#                current['filter'] = create_variable(
-#                    'upsample_filter',
-#                    [1,
-#                     self.upsample_rate,
-#                     self.local_condition_channels,
-#                     self.output_channels])
-
-
-                var['upsampling'] = current
-        return var
+        param_specs = self.create_param_specs()
+        return create_stored_vars(param_specs)['encoder_convnet']
 
     def _create_layer(self, input, layer_index, output_width, dilation,
                       density_embedding):
 
         is_last_layer = (layer_index == (self.layer_count - 1))
-        variables = self.variables['layer_stack'][layer_index]
+        variables = self.variables['layer_stack']['layer{}'.format(layer_index)]
 
         weights_filter = variables['filter']
         weights_gate = variables['gate']
         filter_bias = variables['filter_bias']
         gate_bias = variables['gate_bias']
-
 
         dilation_rate = [dilation] if dilation is not None else None
 
@@ -319,7 +308,7 @@ class ConvNetModel(object):
             transformed2 = tf.nn.relu(conv1 + b2)
             conv2 = tf.nn.conv1d(transformed2, w2, stride=1, padding="SAME")
 
-            filt = self.variables['postprocessing']['projection_filter']
+            filt = self.variables['postprocessing']['lc_proj_filter']
             conv_out = tf.nn.conv1d(conv2, filt, stride=1,
                                        padding="SAME", name="lc_projection")
 

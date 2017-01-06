@@ -297,7 +297,7 @@ class AudioReader(object):
         self.threads.append(thread)
 
 
-    def start_threads(self, sess, n_threads=1):
+    def start_threads(self, sess, n_threads=4):
         for _ in range(n_threads):
             self._start_thread(sess, is_train_not_test=True)
             if self.do_test:
