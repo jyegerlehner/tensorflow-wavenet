@@ -4,3 +4,6 @@ from .audio_reader import AudioReader, load_generic_audio
 from .ops import (mu_law_encode, mu_law_decode, time_to_batch,
                   batch_to_time, causal_conv, optimizer_factory,
                   quantize_sample_density)
+from .param_producer_model import ParamProducerModel
+from .inputspec import InputSpec
+from .paramspec import ParamSpec, ParamTree, ComputedParm, StoredParm

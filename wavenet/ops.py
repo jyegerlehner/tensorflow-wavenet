@@ -6,6 +6,31 @@ MIN_SAMPLE_DENSITY = 500.0
 MAX_SAMPLE_DENSITY = 2000.0
 DENSITY_SPAN = MAX_SAMPLE_DENSITY - MIN_SAMPLE_DENSITY
 
+
+def create_variable(name, shape):
+    '''Create a convolution filter variable with the specified name and shape,
+    and initialize it using Xavier initialition.'''
+    initializer = tf.contrib.layers.xavier_initializer_conv2d()
+    variable = tf.Variable(initializer(shape=shape), name=name)
+    return variable
+
+def create_embedding_table(name, shape):
+    if shape[0] == shape[1]:
+        # Make a one-hot encoding as the initial value.
+        initial_val = np.identity(n=shape[0], dtype=np.float32)
+        return tf.Variable(initial_val, name=name)
+    else:
+        initializer = tf.truncated_normal(shape, mean=0.0, stddev=0.3,
+                                dtype=tf.float32)
+        variable = tf.Variable(initializer, name=name)
+        return variable
+
+def create_bias_variable(name, shape, value=0.0):
+    '''Create a bias variable with the specified name and shape and initialize
+    it to zero.'''
+    initializer = tf.constant_initializer(value, dtype=tf.float32)
+    return tf.Variable(initializer(shape=shape), name=name)
+
 def create_adam_optimizer(learning_rate, momentum):
     return tf.train.AdamOptimizer(learning_rate=learning_rate,
                                   epsilon=1e-4)
@@ -26,17 +51,47 @@ optimizer_factory = {'adam': create_adam_optimizer,
                      'sgd': create_sgd_optimizer,
                      'rmsprop': create_rmsprop_optimizer}
 
+
 def clamp(val, min, max):
     val = tf.maximum(val, min)
     val = tf.minimum(val, max)
     return val
 
 
-def quantize_sample_density(density, quant_levels):
-    density = clamp(density, MIN_SAMPLE_DENSITY, MAX_SAMPLE_DENSITY)
-    ratio = (density - MIN_SAMPLE_DENSITY) / DENSITY_SPAN
+def shape_size(shape):
+    size=1
+    for dim_size in shape.as_list():
+        size *= dim_size
+    return size
+
+
+def gated_residual_layer(input, layer_name):
+    with tf.variable_scope(layer_name):
+        input_size = shape_size(input.get_shape())
+        weights_shape = [input_size, input_size]
+        bias_shape = [input_size]
+        filt_weights = create_variable('filt_weights', weights_shape)
+        gate_weights = create_variable('gate_weights', weights_shape)
+        filt_bias = create_bias_variable('filt_bias', bias_shape)
+        gate_bias = create_bias_variable('gate_bias', bias_shape)
+        t1 = tf.matmul(input, filt_weights) + filt_bias
+        t2 = tf.matmul(input, gate_weights) + gate_bias
+        # Residual output.
+        output = input + t1*t2
+        return output
+
+def quantize_value(value, quant_levels, min, max):
+    assert max > min
+    assert quant_levels > 1
+    density = clamp(density, min, max)
+    ratio = (density - min) / (max - min)
     quant = tf.cast(tf.floor(ratio*quant_levels), dtype=tf.int32)
     return quant
+
+
+def quantize_sample_density(density, quant_levels):
+    return quantize_value(density, quant_levels, MIN_SAMPLE_DENSITY,
+                          MAX_SAMPLE_DENSITY)
 
 
 def time_to_batch(value, dilation, name=None):

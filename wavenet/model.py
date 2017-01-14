@@ -1,36 +1,8 @@
 import numpy as np
 import tensorflow as tf
 
-from .ops import causal_conv, mu_law_encode, mu_law_decode
-
-
-def create_variable(name, shape):
-    '''Create a convolution filter variable with the specified name and shape,
-    and initialize it using Xavier initialition.'''
-    initializer = tf.contrib.layers.xavier_initializer_conv2d()
-    variable = tf.Variable(initializer(shape=shape), name=name)
-    return variable
-
-
-def create_embedding_table(name, shape):
-    if shape[0] == shape[1]:
-        # Make a one-hot encoding as the initial value.
-        initial_val = np.identity(n=shape[0], dtype=np.float32)
-        return tf.Variable(initial_val, name=name)
-    else:
-        initializer = tf.truncated_normal(shape, mean=0.0, stddev=0.3,
-                                dtype=tf.float32)
-        variable = tf.Variable(initializer, name=name)
-        return variable
-
-
-def create_bias_variable(name, shape, initial_value=0.0):
-    '''Create a bias variable with the specified name and shape and initialize
-    it to zero.'''
-    initializer = tf.constant_initializer(value=initial_value,
-                                          dtype=tf.float32)
-    return tf.Variable(initializer(shape=shape), name)
-
+from .ops import (causal_conv, mu_law_encode, mu_law_decode, create_variable,
+                  create_embedding_table, create_bias_variable)
 
 class WaveNetModel(object):
     '''Implements the WaveNet network for generative audio.

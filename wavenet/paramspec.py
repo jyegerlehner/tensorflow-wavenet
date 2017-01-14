@@ -2,7 +2,8 @@
 
 import tensorflow as tf
 
-def create_variable(param_spec):
+
+def create_variable_from_spec(param_spec):
     '''Create a convolution filter variable with the specified name and shape,
     and initialize it using Xavier initialition.'''
     initializer = tf.contrib.layers.xavier_initializer_conv2d()
@@ -11,7 +12,7 @@ def create_variable(param_spec):
     return variable
 
 
-def create_embedding_table(param_spec):
+def create_embedding_table_from_spec(param_spec):
     assert len(param_spec.shape) == 2
     if param_spec.shape[0] == param_spec.shape[1]:
         # Make a one-hot encoding as the initial value.
@@ -25,7 +26,7 @@ def create_embedding_table(param_spec):
         variable = tf.Variable(initializer, name=param_spec.name)
         return variable
 
-def create_bias_variable(param_spec, value=0.0):
+def create_bias_variable_from_spec(param_spec, value=0.0):
     name = param_spec.name
     shape = param_spec.shape
     '''Create a bias variable with the specified name and shape and initialize
@@ -60,6 +61,12 @@ class ParamSpec:
         self.kind = kind
         self.computed_not_stored = None
 
+    def size(self):
+        siz = 1
+        for dim in self.shape:
+            siz *= dim
+        return siz
+
 class StoredParm(ParamSpec):
     def __init__(self, name, shape, kind, dtype=tf.float32):
         ParamSpec.__init__(self, name, shape, kind, dtype)
@@ -75,12 +82,14 @@ def make_variable(param_spec):
                       shape=param_spec.shape,
                       type=param_spec.type)
 
-variable_factory = {'filter': create_variable, 'bias':create_bias_variable,
-                    'embedding':create_embedding_table}
+variable_factory = {'filter': create_variable_from_spec,
+                    'bias':create_bias_variable_from_spec,
+                    'embedding':create_embedding_table_from_spec}
 
 def create_var(param_spec):
     assert param_spec.kind in variable_factory
     return variable_factory[param_spec.kind](param_spec)
+
 
 '''
 Create the stored variables for a model. Stored variables are the parameters
@@ -92,31 +101,31 @@ Args:
   parent: The parent dict to which we are adding parameters and subscopes
 
 '''
-def create_stored_vars(param_tree, parent=None):
+def create_vars(spec_tree, computed_not_stored, parm_factory, parent=None):
     if parent is None:
         parent = dict()
 
     # Creation of parameters can be a two-stage process: creation of stored
     # variables might happen after creation of computed variables. In which
     # case the tree branches will already have been created.
-    if param_tree.name in parent:
-        layer = param_tree[param_tree.name]
+    if spec_tree.name in parent:
+        layer = spec_tree[spec_tree.name]
     else:
         layer = dict()
-        parent[param_tree.name] = layer
+        parent[spec_tree.name] = layer
 
-
-    with tf.variable_scope(param_tree.name):
+    with tf.variable_scope(spec_tree.name):
         # Create each parameter at this scope.
-        for param in param_tree.params:
-            # Computed variables are the output of another neural net,
-            # so we don't create them here.
-            if not param.computed_not_stored:
-                assert param.name not in layer
-                layer[param.name] = create_var(param)
+        for param_spec in spec_tree.params:
+            if param_spec.computed_not_stored == computed_not_stored:
+                assert param_spec.name not in layer
+                layer[param_spec.name] = parm_factory(param_spec)
 
-        for item in param_tree.children:
-                # Recursively create subtrees.
-                create_stored_vars(item, layer)
+        for item in spec_tree.children:
+            # Recursively create subtrees.
+            create_vars(item,
+                        computed_not_stored,
+                        parm_factory,
+                        layer)
 
     return parent

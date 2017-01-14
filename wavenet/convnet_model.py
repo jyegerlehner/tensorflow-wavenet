@@ -1,36 +1,13 @@
 import numpy as np
 import tensorflow as tf
-from .ops import quantize_sample_density
-from .paramspec import create_stored_vars, StoredParm, ComputedParm, ParamTree
+from .ops import (quantize_sample_density, create_variable,
+                  create_embedding_table, create_bias_variable)
+from .paramspec import (create_vars, StoredParm, ComputedParm,
+                        ParamTree, create_var)
 
 DENSITY_QUANT_LEVELS = 50
 CHARACTER_CARDINALITY = 256
 FILTER_WIDTH = 2
-
-def create_variable(name, shape):
-    '''Create a convolution filter variable with the specified name and shape,
-    and initialize it using Xavier initialition.'''
-    initializer = tf.contrib.layers.xavier_initializer_conv2d()
-    variable = tf.Variable(initializer(shape=shape), name=name)
-    return variable
-
-
-def create_embedding_table(name, shape):
-    if shape[0] == shape[1]:
-        # Make a one-hot encoding as the initial value.
-        initial_val = np.identity(n=shape[0], dtype=np.float32)
-        return tf.Variable(initial_val, name=name)
-    else:
-        initializer = tf.truncated_normal(shape, mean=0.0, stddev=0.3,
-                                dtype=tf.float32)
-        variable = tf.Variable(initializer, name=name)
-        return variable
-
-def create_bias_variable(name, shape, value=0.0):
-    '''Create a bias variable with the specified name and shape and initialize
-    it to zero.'''
-    initializer = tf.constant_initializer(value, dtype=tf.float32)
-    return tf.Variable(initializer(shape=shape), name)
 
 class ConvNetModel(object):
     def __init__(self,
@@ -41,7 +18,10 @@ class ConvNetModel(object):
                  layer_count=None,
                  dilations=None,
                  gated_linear=False,
-                 density_conditioned=False):
+                 density_conditioned=False,
+                 compute_the_params=False,
+                 non_computed_params=None,
+                 variables=None):
         self.encoder_channels = encoder_channels
         self.histograms = histograms
         self.output_channels = output_channels
@@ -67,8 +47,9 @@ class ConvNetModel(object):
         # True if this net is conditioning on density.
         self.density_conditioned = density_conditioned
         self.sample_density = None
-
-        self.variables = self._create_variables()
+        self.compute_the_params = compute_the_params
+        self.non_computed_params = non_computed_params
+        self.variables = self._create_vars()
 
     def _receptive_field(self):
         if self.dilations is None:
@@ -81,14 +62,27 @@ class ConvNetModel(object):
             size = max_dilation*2 + (num_stacks-1)*(max_dilation*2-1)
             return size
 
+    def _make_spec(self, name, shape, kind):
+        if self.compute_the_params:
+            if name in self.non_computed_params:
+                print("StoredParam:{}".format(name))
+                return StoredParm(name=name, shape=shape, kind=kind)
+            else:
+                print("ComputedParam:{}".format(name))
+                return ComputedParm(name=name, shape=shape, kind=kind)
+        else:
+            print("StoredParam:{}".format(name))
+            return StoredParm(name=name, shape=shape, kind=kind)
+
+
     def create_param_specs(self):
         t = ParamTree('encoder_convnet')
         c = t.add_child('embeddings')
-        c.add_param(StoredParm(name='text_embedding',
-                               shape=[CHARACTER_CARDINALITY,
-                                      self.encoder_channels],
-                               kind='embedding'))
-        c.add_param(StoredParm(name='density_embedding',
+        c.add_param(self._make_spec(name='text_embedding',
+                                    shape=[CHARACTER_CARDINALITY,
+                                        self.encoder_channels],
+                                    kind='embedding'))
+        c.add_param(self._make_spec(name='density_embedding',
                                shape=[DENSITY_QUANT_LEVELS,
                                       self.encoder_channels],
                                kind='embedding'))
@@ -96,81 +90,86 @@ class ConvNetModel(object):
         c = t.add_child('layer_stack')
         for layer in range(self.layer_count):
             l = c.add_child('layer{}'.format(layer))
-            l.add_param(StoredParm(name='filter',
+            l.add_param(self._make_spec(name='filter',
                                     shape=[FILTER_WIDTH,
                                            self.encoder_channels,
                                            self.encoder_channels],
                                     kind='filter'))
-            l.add_param(StoredParm(name='gate',
+            l.add_param(self._make_spec(name='gate',
                                    shape=[FILTER_WIDTH,
                                           self.encoder_channels,
                                           self.encoder_channels],
                                    kind='filter'))
-            l.add_param(StoredParm(name='skip',
+            l.add_param(self._make_spec(name='skip',
                                    shape=[1,
                                           self.encoder_channels,
                                           self.output_channels],
                                    kind='filter'))
-            l.add_param(StoredParm(name='filter_bias',
+            l.add_param(self._make_spec(name='filter_bias',
                                    shape=[self.encoder_channels],
                                    kind='bias'))
-            l.add_param(StoredParm(name='gate_bias',
+            l.add_param(self._make_spec(name='gate_bias',
                                    shape=[self.encoder_channels],
                                    kind='bias'))
             if self.density_conditioned:
-                l.add_param(StoredParm(name='sd_filt',
+                l.add_param(self._make_spec(name='sd_filt',
                                        shape=[1,
                                               self.encoder_channels,
                                               self.encoder_channels],
                                        kind='filter'))
-                l.add_param(StoredParm(name='sd_gate',
+                l.add_param(self._make_spec(name='sd_gate',
                                        shape=[1,
                                               self.encoder_channels,
                                               self.encoder_channels],
                                        kind='filter'))
-                l.add_param(StoredParm(name='sd_filt_bias',
+                l.add_param(self._make_spec(name='sd_filt_bias',
                                        shape=[self.encoder_channels],
                                        kind='bias'))
-                l.add_param(StoredParm(name='sd_gate_bias',
+                l.add_param(self._make_spec(name='sd_gate_bias',
                                        shape=[self.encoder_channels],
                                        kind='bias'))
             if layer != self.layer_count-1:
-                l.add_param(StoredParm(name='dense',
+                l.add_param(self._make_spec(name='dense',
                                        shape=[1,
                                               self.encoder_channels,
                                               self.encoder_channels],
                                        kind='filter'))
-                l.add_param(StoredParm(name='dense_bias',
+                l.add_param(self._make_spec(name='dense_bias',
                                        shape=[self.encoder_channels],
                                        kind='bias'))
 
         c = t.add_child('postprocessing')
-        c.add_param(StoredParm(name='postprocess1',
+        c.add_param(self._make_spec(name='postprocess1',
                                shape=[1,
                                       self.output_channels,
                                       self.output_channels],
                                kind='filter'))
-        c.add_param(StoredParm(name='postprocess2',
+        c.add_param(self._make_spec(name='postprocess2',
                                shape=[1,
                                       self.output_channels,
                                       self.output_channels],
                                kind='filter'))
-        c.add_param(StoredParm(name='bias1',
+        c.add_param(self._make_spec(name='bias1',
                                shape=[self.output_channels],
                                kind='bias'))
-        c.add_param(StoredParm(name='bias2',
+        c.add_param(self._make_spec(name='bias2',
                                shape=[self.output_channels],
                                kind='bias'))
-        c.add_param(StoredParm(name='lc_proj_filter',
+        c.add_param(self._make_spec(name='lc_proj_filter',
                                shape=[1,
                                       self.output_channels,
                                       self.local_condition_channels],
                                kind='filter'))
         return t
 
-    def _create_variables(self):
+    def param_dict():
+        return self.variables
+
+    def _create_vars(self):
         param_specs = self.create_param_specs()
-        return create_stored_vars(param_specs)['encoder_convnet']
+        return create_vars(spec_tree=param_specs,
+                                  computed_not_stored=False,
+                                  parm_factory=create_var)['encoder_convnet']
 
     def _create_layer(self, input, layer_index, output_width, dilation,
                       density_embedding):
@@ -386,3 +385,4 @@ class ConvNetModel(object):
             upsampled = self._upsample(embedding, audio_length)
             out = self._create_network(upsampled, audio_length)
         return out
+
