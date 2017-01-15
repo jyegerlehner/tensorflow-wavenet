@@ -271,6 +271,11 @@ def main():
         dilations=encoder_params['dilations'],
         gated_linear=False,
         density_conditioned=True)
+#        density_conditioned=False,
+#        compute_the_params=True,
+#        non_computed_params=None,
+#        variables=None)
+
 
     # Create network.
     net = WaveNetModel(

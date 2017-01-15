@@ -34,7 +34,6 @@ class LogicNetModel:
         self.output=None
 
     def _make_spec(self, name, shape, kind):
-        print("ComputedParam:{}".format(name))
         return ComputedParm(name=name, shape=shape, kind=kind)
 
     def _create_param_specs(self):

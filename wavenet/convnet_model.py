@@ -75,6 +75,29 @@ class ConvNetModel(object):
             return StoredParm(name=name, shape=shape, kind=kind)
 
 
+    def _add_recursively(self, name, newvars, vars):
+        if isinstance(newvars, dict):
+            for name in newvar.keys():
+                if is_instance(newvars[name], dict):
+                    assert name in vars
+                    # Both are dicts
+                    self._add_recursively(name, newvars[name], vars[name])
+                else:
+                    # newvars[name] is a param tensor.
+                    self._add_recursively(name, newvars[name], vars)
+        else:
+            # newvars is a variable produced by param_producer_model.
+            vars[name] = newvars
+
+
+    # Given a recursive dict of parameters produced by a param_producer_model,
+    # add them in to the vars dictionary. Assumes the non-computed parameters
+    # have already been created and added to the self.vars, along with the
+    # levels in the tree.
+    def merge_vars(self, newvars):
+        self._add_recursively('', newvars, self.vars)
+
+
     def create_param_specs(self):
         t = ParamTree('encoder_convnet')
         c = t.add_child('embeddings')
@@ -82,10 +105,11 @@ class ConvNetModel(object):
                                     shape=[CHARACTER_CARDINALITY,
                                         self.encoder_channels],
                                     kind='embedding'))
-        c.add_param(self._make_spec(name='density_embedding',
-                               shape=[DENSITY_QUANT_LEVELS,
-                                      self.encoder_channels],
-                               kind='embedding'))
+        if self.density_conditioned:
+            c.add_param(self._make_spec(name='density_embedding',
+                                   shape=[DENSITY_QUANT_LEVELS,
+                                          self.encoder_channels],
+                                   kind='embedding'))
 
         c = t.add_child('layer_stack')
         for layer in range(self.layer_count):
