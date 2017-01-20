@@ -7,6 +7,15 @@ MAX_SAMPLE_DENSITY = 2000.0
 DENSITY_SPAN = MAX_SAMPLE_DENSITY - MIN_SAMPLE_DENSITY
 
 
+def show_params(params, indent=""):
+    for key in params.keys():
+        if isinstance(params[key], dict):
+            print(indent+key)
+            show_params(params[key], indent+"    ")
+        else:
+            print(indent+"    {}:{}".format(key, params[key]))
+
+
 def create_variable(name, shape):
     '''Create a convolution filter variable with the specified name and shape,
     and initialize it using Xavier initialition.'''
@@ -83,8 +92,8 @@ def gated_residual_layer(input, layer_name):
 def quantize_value(value, quant_levels, min, max):
     assert max > min
     assert quant_levels > 1
-    density = clamp(density, min, max)
-    ratio = (density - min) / (max - min)
+    value = clamp(value, min, max)
+    ratio = (value - min) / (max - min)
     quant = tf.cast(tf.floor(ratio*quant_levels), dtype=tf.int32)
     return quant
 

@@ -34,6 +34,13 @@ def create_bias_variable_from_spec(param_spec, value=0.0):
     initializer = tf.constant_initializer(value, dtype=tf.float32)
     return tf.Variable(initializer(shape=shape), name)
 
+def show_param_tree(tree, indent=""):
+    print(indent + tree.name)
+    for param in tree.params:
+        print(indent + "    {}, {}, {}, {}".format(param.name,
+            param.shape, param.dtype, param.kind))
+    for child in tree.children:
+        show_param_tree(child, indent+"  ")
 
 class ParamTree:
     def __init__(self, name):

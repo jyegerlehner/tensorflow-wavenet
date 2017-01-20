@@ -9,7 +9,9 @@ import matplotlib.pyplot as plt
 import librosa
 import random
 from wavenet import (WaveNetModel, time_to_batch, batch_to_time, causal_conv,
-                     optimizer_factory, mu_law_decode, ConvNetModel)
+                     optimizer_factory, mu_law_decode, ConvNetModel,
+                     InputSpec, ParamProducerModel, show_params,
+                     compute_sample_density)
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
@@ -30,7 +32,7 @@ F3 = 233.08  # B-flat frequency in hz
 UPSAMPLE_RATE = 200
 MEDIAN_SAMPLES_PER_CHAR = 200
 LAYER_COUNT = 6
-TEXT_ENCODER_CHANNELS = 8
+TEXT_ENCODER_CHANNELS = 16
 TEXT_ENCODER_OUTPUT_CHANNELS = 16 # 128 # 512
 LOCAL_CONDITION_CHANNELS = 16
 
@@ -102,7 +104,7 @@ class TestLCNet(tf.test.TestCase):
 
         self.optimizer_type = 'adam'
         self.learning_rate = 0.0004
-        self.generate = True
+        self.generate = False
         self.momentum = 0.9
         self.global_conditioning = False
         self.train_iters = 100
@@ -141,7 +143,8 @@ class TestLCNet(tf.test.TestCase):
         self.samples_placeholder = tf.placeholder(dtype=tf.int32)
         self._initialize_source_waveforms()
         self.last_start_times = {0:0, 1:0, 2:0, 3:0}
-
+        self.sample_density = None
+        self.audio_length = None
 
 
     def _save_net(self, sess):
@@ -154,20 +157,21 @@ class TestLCNet(tf.test.TestCase):
 
     def generate_waveform(self, sess, fast_generation, gc, next_sample_probs,
                           local_conditions, ascii_sequence, index):
-        receptive_field = self.net.receptive_field()
         results = []
-        samples_to_generate = (len(ascii_sequence) -
-                               self.net.receptive_field() + 1) * UPSAMPLE_RATE
 
-
+        samples_to_generate = len(ascii_sequence)*UPSAMPLE_RATE
+        print("samples_to_generate:{}".format(samples_to_generate))
         # Generate the local conditions from this text.
         lc = sess.run(local_conditions,
-                      feed_dict={self.ascii_placeholder: ascii_sequence})
+                      feed_dict={self.ascii_placeholder: ascii_sequence,
+                                 self.sample_density: UPSAMPLE_RATE,
+                                 self.audio_length: float(samples_to_generate)})
         samples_to_generate = lc.shape[1]
         waveform = [128]*samples_to_generate
         waveform = np.array(waveform)
         print("Samples to generate:{}, lc shape:{} for text:{}".format(
             samples_to_generate,lc.shape, ascii_to_text(ascii_sequence)))
+        receptive_field = self.net.receptive_field()
 
         for i in range(1,samples_to_generate):
             if i % 100 == 0:
@@ -219,10 +223,14 @@ class TestLCNet(tf.test.TestCase):
 
 
     def generate_waveforms(self, sess, net, fast_generation, global_condition, ascii):
+#        (sample_density, audio_length) = compute_sample_density(
+#                                            audio=self.audio_placeholder,
+#                                            text=self.ascii_placeholder)
+
         next_sample_probs = net.predict_proba(self.samples_placeholder,
             self.gc_placeholder, local_condition=self.lc_placeholder)
         local_conditions = self.text_encoder.upsample(self.ascii_placeholder,
-                             tf.shape(self.ascii_placeholder)[0]*UPSAMPLE_RATE)
+                             self.audio_length, self.sample_density)
 
         num_waveforms = len(ascii)
         gc = None
@@ -409,6 +417,25 @@ class TestLCNet(tf.test.TestCase):
         return (target_amplitudes, speaker_ids, ascii_sequences)
 
 
+    def create_loss(self):
+        (sample_density, audio_length) = compute_sample_density(
+                                            audio=self.audio_placeholder,
+                                            text=self.ascii_placeholder)
+
+        # Store these so we can feed them using feeddict when we generate
+        # from the model later.
+        self.sample_density = sample_density
+        self.audio_length = audio_length
+
+        local_conditions = self.text_encoder.upsample(self.ascii_placeholder,
+                              audio_length, sample_density)
+        loss = self.net.loss(input_batch=self.audio_placeholder,
+                             global_condition_batch=self.gc_placeholder,
+                             local_condition_batch=local_conditions)
+
+
+        return loss
+
     # Train a net on a short clip of 3 sine waves superimposed
     # (an e-flat chord).
     #
@@ -448,11 +475,9 @@ class TestLCNet(tf.test.TestCase):
 #                    plt.plot(freqs[indices], power_spectrum[indices])
 #                    plt.show()
 
-        local_conditions = self.text_encoder.upsample(self.ascii_placeholder,
-                               tf.shape(self.audio_placeholder)[0])
-        loss = self.net.loss(input_batch=self.audio_placeholder,
-                             global_condition_batch=self.gc_placeholder,
-                             local_condition_batch=local_conditions)
+        loss = self.create_loss()
+
+
         optimizer = optimizer_factory[self.optimizer_type](
                       learning_rate=self.learning_rate, momentum=self.momentum)
         trainable = tf.trainable_variables()
@@ -508,6 +533,7 @@ class TestLCNet(tf.test.TestCase):
 
             (audio, speaker_ids, ascii, duration_ratio) = \
                                             self._make_training_pair()
+
             feed_dict = {self.audio_placeholder: audio,
                          self.ascii_placeholder: ascii}
 
@@ -568,8 +594,101 @@ class TestLCNet(tf.test.TestCase):
                     # self._load_net(sess)
                     generated_waveforms, _ = self.generate_waveforms(
                         sess, self.net, False, None, ascii)
+
                     check_waveform(
                         self.assertGreater, generated_waveforms[0], None)
+
+
+class TestHyperTraining(TestLCNet):
+    def setUp(self):
+        print('TestHyperNetWithLocalConditioning setup.')
+        sys.stdout.flush()
+
+        self.optimizer_type = 'adam'
+        self.learning_rate = 0.0004
+        self.generate = True
+        self.momentum = 0.9
+        self.global_conditioning = False
+        self.train_iters = 30000
+        self.net = WaveNetModel(
+            dilations=[1, 2, 4, 8, 16, 32, 64, 128, 256,
+                       1, 2, 4, 8, 16, 32, 64, 128, 256,
+                       1, 2, 4, 8, 16, 32, 64, 128, 256],
+            filter_width=2,
+            residual_channels=32,
+            dilation_channels=32,
+            quantization_channels=QUANTIZATION_CHANNELS,
+            use_biases=True,
+            skip_channels=256,
+            local_condition_channels=LOCAL_CONDITION_CHANNELS,
+            ctc_loss=False,
+            gated_linear=False)
+
+        # Create text encoder network.
+        self.text_encoder = ConvNetModel(
+            encoder_channels=TEXT_ENCODER_CHANNELS,
+            histograms=False,
+            output_channels=TEXT_ENCODER_OUTPUT_CHANNELS,
+            local_condition_channels=LOCAL_CONDITION_CHANNELS,
+            layer_count=None,
+            dilations=[1, 2, 4, 8, 16, 32, 64, 128, 256,
+                       1, 2, 4, 8, 16, 32, 64, 128, 256,
+                       1, 2, 4, 8, 16, 32, 64, 128, 256],
+            gated_linear=False,
+            density_conditioned=False,
+            compute_the_params=True,
+            non_computed_params=['text_embedding'])
+
+
+        input_spec = InputSpec(
+            kind='quantized_scalar',
+            name='sample_density',
+            opts={'quant_levels':100, 'range_min':0.5, 'range_max':1.5})
+
+        self.parameter_producer = ParamProducerModel(
+            input_spec=input_spec,
+            output_specs=self.text_encoder.param_specs,
+            residual_channels=256)
+
+
+        self.audio_placeholder = tf.placeholder(dtype=tf.float32, name='audio_placeholder')
+        self.gc_placeholder = tf.placeholder(dtype=tf.int32, name='gc_placeholder')  \
+            if self.global_conditioning else None
+        self.ascii_placeholder = tf.placeholder(dtype=tf.int32, name='ascii_placeholder')
+        self.lc_placeholder = tf.placeholder(dtype=tf.float32, name='lc_placeholder')
+        self.samples_placeholder = tf.placeholder(dtype=tf.int32, name='samples_placeholder')
+        self._initialize_source_waveforms()
+        self.last_start_times = {0:0, 1:0, 2:0, 3:0}
+        self.sample_density = None
+        self.audio_length = None
+
+
+    def create_loss(self):
+        (sample_density, audio_length) = compute_sample_density(
+                                            audio=self.audio_placeholder,
+                                            text=self.ascii_placeholder)
+
+        # Store these so we can feed them using feeddict when we generate
+        # from the model later.
+        self.sample_density = sample_density
+        self.audio_length = audio_length
+
+        # Parameters of the text_encoder convnet are outputs of the
+        # parameter_producer.
+        encoder_params = self.parameter_producer.create_params(
+            input_value=sample_density)
+        self.text_encoder.merge_params(encoder_params)
+
+        #show_params(self.text_encoder.variables)
+
+        local_conditions = self.text_encoder.upsample(
+            self.ascii_placeholder, audio_length, sample_density)
+
+
+        loss = self.net.loss(input_batch=self.audio_placeholder,
+                             global_condition_batch=self.gc_placeholder,
+                             local_condition_batch=local_conditions)
+        return loss
 
 
 #class TestDebug(tf.test.TestCase):

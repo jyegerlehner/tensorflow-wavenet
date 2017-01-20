@@ -10,8 +10,8 @@ from .ops import (quantize_value, create_variable, create_embedding_table,
 # This is used for the size of the representation vector in the net,
 # including the input's embedding size all the way up until the
 # output-specific layers.
-OUT_SPECIFIC_LAYER_COUNT = 3
-COMMON_LAYER_COUNT = 1
+OUT_SPECIFIC_LAYER_COUNT = 4
+COMMON_LAYER_COUNT = 0
 
 
 '''
@@ -104,7 +104,10 @@ class ParamProducerModel:
             table = create_embedding_table(
                             name=self.input_spec.name+"_embedding_table",
                             shape=table_shape)
-            return tf.gather_nd(table, quantized)
+            #return tf.gather_nd(table, quantized)
+            vect = tf.nn.embedding_lookup(table, quantized)
+            vect = tf.reshape(vect, [1, -1])
+            return vect
 
 
     def _encode_category(self, input_value):
@@ -114,7 +117,10 @@ class ParamProducerModel:
             table = create_embedding_table(
                             name=self.input_spec.name+"_embedding_table",
                             shape = table_shape)
-            return tf.gather_nd(table, input_value)
+            #return tf.gather_nd(table, input_value)
+            vect = tf.nn.embedding_lookup(table, input_value)
+            vect = tf.reshape(vect, [1, -1])
+            return vect
 
 
     def _encode_input(self, input_value):

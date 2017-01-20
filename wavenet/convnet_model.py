@@ -8,6 +8,7 @@ from .paramspec import (create_vars, StoredParm, ComputedParm,
 DENSITY_QUANT_LEVELS = 50
 CHARACTER_CARDINALITY = 256
 FILTER_WIDTH = 2
+TOP_NAME = 'encoder_convnet'
 
 class ConvNetModel(object):
     def __init__(self,
@@ -20,8 +21,7 @@ class ConvNetModel(object):
                  gated_linear=False,
                  density_conditioned=False,
                  compute_the_params=False,
-                 non_computed_params=None,
-                 variables=None):
+                 non_computed_params=None):
         self.encoder_channels = encoder_channels
         self.histograms = histograms
         self.output_channels = output_channels
@@ -46,9 +46,9 @@ class ConvNetModel(object):
         self.gated_linear = gated_linear
         # True if this net is conditioning on density.
         self.density_conditioned = density_conditioned
-        self.sample_density = None
         self.compute_the_params = compute_the_params
         self.non_computed_params = non_computed_params
+        self.param_specs=None
         self.variables = self._create_vars()
 
     def _receptive_field(self):
@@ -65,26 +65,25 @@ class ConvNetModel(object):
     def _make_spec(self, name, shape, kind):
         if self.compute_the_params:
             if name in self.non_computed_params:
-                print("StoredParam:{}".format(name))
                 return StoredParm(name=name, shape=shape, kind=kind)
             else:
-                print("ComputedParam:{}".format(name))
                 return ComputedParm(name=name, shape=shape, kind=kind)
         else:
-            print("StoredParam:{}".format(name))
             return StoredParm(name=name, shape=shape, kind=kind)
 
 
     def _add_recursively(self, name, newvars, vars):
         if isinstance(newvars, dict):
-            for name in newvar.keys():
-                if is_instance(newvars[name], dict):
-                    assert name in vars
+            for child_name in newvars.keys():
+                if isinstance(newvars[child_name], dict):
+                    assert child_name in vars
                     # Both are dicts
-                    self._add_recursively(name, newvars[name], vars[name])
+                    self._add_recursively(child_name, newvars[child_name],
+                                          vars[child_name])
                 else:
                     # newvars[name] is a param tensor.
-                    self._add_recursively(name, newvars[name], vars)
+                    self._add_recursively(child_name, newvars[child_name],
+                                          vars)
         else:
             # newvars is a variable produced by param_producer_model.
             vars[name] = newvars
@@ -92,14 +91,14 @@ class ConvNetModel(object):
 
     # Given a recursive dict of parameters produced by a param_producer_model,
     # add them in to the vars dictionary. Assumes the non-computed parameters
-    # have already been created and added to the self.vars, along with the
+    # have already been created and added to the self.variables, along with the
     # levels in the tree.
-    def merge_vars(self, newvars):
-        self._add_recursively('', newvars, self.vars)
+    def merge_params(self, newvars):
+        self._add_recursively('', newvars, self.variables)
 
 
     def create_param_specs(self):
-        t = ParamTree('encoder_convnet')
+        t = ParamTree(TOP_NAME)
         c = t.add_child('embeddings')
         c.add_param(self._make_spec(name='text_embedding',
                                     shape=[CHARACTER_CARDINALITY,
@@ -190,16 +189,22 @@ class ConvNetModel(object):
         return self.variables
 
     def _create_vars(self):
-        param_specs = self.create_param_specs()
-        return create_vars(spec_tree=param_specs,
+        self.param_specs = self.create_param_specs()
+
+        print("Paramspecs:{}".format(self.param_specs))
+        # Strip the top element off; it's just the name of the
+        # net.
+        self.param_specs = self.param_specs  # self.param_specs.children[0]
+        return create_vars(spec_tree=self.param_specs,
                                   computed_not_stored=False,
-                                  parm_factory=create_var)['encoder_convnet']
+                                  parm_factory=create_var)
 
     def _create_layer(self, input, layer_index, output_width, dilation,
                       density_embedding):
 
         is_last_layer = (layer_index == (self.layer_count - 1))
-        variables = self.variables['layer_stack']['layer{}'.format(layer_index)]
+        variables = self.variables[TOP_NAME]['layer_stack'][
+                        'layer{}'.format(layer_index)]
 
         weights_filter = variables['filter']
         weights_gate = variables['gate']
@@ -290,12 +295,12 @@ class ConvNetModel(object):
         else:
             return skip_contribution, None
 
-    def _density_embedding(self):
+    def _density_embedding(self, sample_density):
         if not self.density_conditioned:
             return None
         quantized_density = quantize_sample_density(
-            self.sample_density, DENSITY_QUANT_LEVELS)
-        table = self.variables['embeddings']['density_embedding']
+            sample_density, DENSITY_QUANT_LEVELS)
+        table = self.variables[TOP_NAME]['embeddings']['density_embedding']
         density_embedding = tf.nn.embedding_lookup(table,
                                                    quantized_density)
         shape = [1, 1, self.encoder_channels]
@@ -303,11 +308,11 @@ class ConvNetModel(object):
 
         return density_embedding
 
-    def _create_network(self, input_batch, audio_length):
+    def _create_network(self, input_batch, audio_length, sample_density):
         with tf.name_scope('layer_stack'):
             skip_outs = []
             current_layer = input_batch
-            density_embedding = self._density_embedding()
+            density_embedding = self._density_embedding(sample_density)
             for i in range(self.layer_count):
                 dilation = self.dilations[i] if self.dilations is not None \
                     else None
@@ -320,10 +325,11 @@ class ConvNetModel(object):
                         self.layer_out_shapes.append(tf.shape(current_layer))
 
         with tf.name_scope('postprocessing'):
-            w1 = self.variables['postprocessing']['postprocess1']
-            w2 = self.variables['postprocessing']['postprocess2']
-            b1 = self.variables['postprocessing']['bias1']
-            b2 = self.variables['postprocessing']['bias2']
+            postproc_vars = self.variables[TOP_NAME]['postprocessing']
+            w1 = postproc_vars['postprocess1']
+            w2 = postproc_vars['postprocess2']
+            b1 = postproc_vars['bias1']
+            b2 = postproc_vars['bias2']
 
             total = sum(skip_outs) + b1
             transformed1 = tf.nn.relu(total)
@@ -331,7 +337,7 @@ class ConvNetModel(object):
             transformed2 = tf.nn.relu(conv1 + b2)
             conv2 = tf.nn.conv1d(transformed2, w2, stride=1, padding="SAME")
 
-            filt = self.variables['postprocessing']['lc_proj_filter']
+            filt = postproc_vars['lc_proj_filter']
             conv_out = tf.nn.conv1d(conv2, filt, stride=1,
                                        padding="SAME", name="lc_projection")
 
@@ -349,15 +355,11 @@ class ConvNetModel(object):
 #                                               name='upsampled')
         return conv_out
 
-    def _upsample(self, embedding, audio_length):
+    def _upsample(self, embedding, audio_length, sample_density):
         with tf.name_scope('upsampling'):
 
-            # Number of samples per character.
-            self.sample_density = tf.cast(audio_length, dtype=tf.float32) /  \
-                tf.cast(self.text_shape[0], dtype=tf.float32)
-
             # Number of samples we've currently got if we preserve density.
-            number_samples = self.sample_density * tf.cast(
+            number_samples = sample_density * tf.cast(
                 tf.shape(embedding)[1], dtype=tf.float32)
             number_samples = tf.cast(tf.ceil(number_samples), dtype=tf.int32)
 
@@ -394,7 +396,8 @@ class ConvNetModel(object):
             # Put entries of 0 on either side of the input time
             # series (dimension 1).
             padded_ascii = tf.pad(ascii, [[char_pad, char_pad]]) # dim1
-            embedding_table = self.variables['embeddings']['text_embedding']
+            embedding_table = self.variables[TOP_NAME]['embeddings'
+                                  ]['text_embedding']
             embedding = tf.nn.embedding_lookup(embedding_table,
                                                padded_ascii)
             self.embedding_shape = tf.shape(embedding)
@@ -402,11 +405,11 @@ class ConvNetModel(object):
             embedding = tf.reshape(embedding, shape)
         return embedding
 
-    def upsample(self, input_text, audio_length):
+    def upsample(self, input_text, audio_length, sample_density):
         with tf.name_scope('text_conv_net'):
             self.text_shape = tf.shape(input_text)
             embedding = self._embed_ascii(input_text, audio_length)
-            upsampled = self._upsample(embedding, audio_length)
-            out = self._create_network(upsampled, audio_length)
+            upsampled = self._upsample(embedding, audio_length, sample_density)
+            out = self._create_network(upsampled, audio_length, sample_density)
         return out
 
