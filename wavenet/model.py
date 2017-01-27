@@ -3,6 +3,12 @@ import tensorflow as tf
 
 from .ops import (causal_conv, mu_law_encode, mu_law_decode, create_variable,
                   create_embedding_table, create_bias_variable)
+from .paramspec import (create_vars, StoredParm, ComputedParm,
+                        ParamTree, create_var)
+
+
+TOP_NAME = 'wavenet'
+
 
 class WaveNetModel(object):
     '''Implements the WaveNet network for generative audio.
@@ -34,7 +40,9 @@ class WaveNetModel(object):
                  global_condition_cardinality=None,
                  local_condition_channels=None,
                  ctc_loss=False,
-                 gated_linear=False):
+                 gated_linear=False,
+                 compute_the_params=False,
+                 non_computed_params=None):
         '''Initializes the WaveNet model.
 
         Args:
@@ -71,6 +79,13 @@ class WaveNetModel(object):
                 must have dimension global_condition_channels.
             ctc_loss: True iff we should use connectionist temporal loss.
                 Otherwise we use cross entropy.
+            gated_linear: True iff we use linear instead of hypertan in the
+                gating units.
+            compute_the_params: True iff we compute params in a hypernet
+                arrangement.
+            non_computed_params: List of tokens indicating which parameters
+                are not computed. Only has an effect if compute_the_params
+                is True.
 
         '''
         self.dilations = dilations
@@ -87,126 +102,180 @@ class WaveNetModel(object):
         self.ctc_loss = ctc_loss
         # Add one category for "blank"
         self.softmax_channels = self.quantization_channels + 1
-        self.variables = self._create_variables()
         self.gated_linear = gated_linear
-
+        self.compute_the_params = compute_the_params
+        self.non_computed_params = non_computed_params
         self.indices = None
         self.labs = None
         self.raw_output_shape = None
         self.lc_shape = None
         self.disc_input_shape = None
         self.extended_shape = None
+        self.variables = self._create_vars()
 
+    def _make_spec(self, name, shape, kind):
+        def has_match(name, tokens):
+            match = True
+            for token in tokens:
+                if token in name:
+                    match = True
+                    break
+            return match
 
-    def _create_variables(self):
-        '''This function creates all variables used by the network.
+        if self.compute_the_params:
+            # non_computed_params is list of tokens, such that if that token
+            # appears in the parameter name, it is not computed.
+            if has_match(name, self.non_computed_params):
+                return StoredParm(name=name, shape=shape, kind=kind)
+            else:
+                return ComputedParm(name=name, shape=shape, kind=kind)
+        else:
+            return StoredParm(name=name, shape=shape, kind=kind)
+
+    def _create_vars(self):
+        self.param_specs = self.create_param_specs()
+
+        print("Paramspecs:{}".format(self.param_specs))
+        # Strip the top element off; it's just the name of the
+        # net.
+        self.param_specs = self.param_specs  # self.param_specs.children[0]
+        return create_vars(spec_tree=self.param_specs,
+                                  computed_not_stored=False,
+                                  parm_factory=create_var)
+
+    def create_param_specs(self):
+        '''This function creates all specs of all the parameters in the model.
         This allows us to share them between multiple calls to the loss
         function and generation function.'''
 
-        var = dict()
+        t = ParamTree(TOP_NAME)
+        c = t.add_child('embeddings')
+        # We only look up the embedding if we are conditioning on a
+        # set of mutually-exclusive categories. We can also condition
+        # on an already-embedded dense vector, in which case it's
+        # given to us and we don't need to do the embedding lookup.
+        # Still another alternative is no global condition at all, in
+        # which case we also don't do a tf.nn.embedding_lookup.
+        if self.global_condition_cardinality is not None:
+            c.add_param(self._make_spec(
+                name='gc_embedding',
+                shape=[self.global_condition_cardinality,
+                       self.global_condition_channels],
+                kind='embedding'))
 
-        with tf.variable_scope('wavenet'):
-            # We only look up the embedding if we are conditioning on a
-            # set of mutually-exclusive categories. We can also condition
-            # on an already-embedded dense vector, in which case it's
-            # given to us and we don't need to do the embedding lookup.
-            # Still another alternative is no global condition at all, in
-            # which case we also don't do a tf.nn.embedding_lookup.
-            with tf.variable_scope('embeddings'):
-                layer = dict()
-                if self.global_condition_cardinality is not None:
-                    layer['gc_embedding'] = create_embedding_table(
-                        'gc_embedding',
-                        [self.global_condition_cardinality,
-                         self.global_condition_channels])
-                layer['input_embedding'] = create_embedding_table(
-                    'input_embedding',
-                    [self.softmax_channels,
-                     self.residual_channels])
-                var['embeddings'] = layer
+        c.add_param(self._make_spec(
+            name='input_embedding',
+            shape=[self.softmax_channels,
+                   self.residual_channels],
+            kind='embedding'))
 
-            var['dilated_stack'] = list()
-            with tf.variable_scope('dilated_stack'):
-                for i, dilation in enumerate(self.dilations):
-                    with tf.variable_scope('layer{}'.format(i)):
-                        current = dict()
-                        if (i == 0 and self.local_condition_channels
-                            is not None):
-                            current['filter'] = create_variable(
-                                'filter',
-                                [self.filter_width,
-                                 self.residual_channels +
-                                     self.local_condition_channels,
-                                 self.dilation_channels])
-                            current['gate'] = create_variable(
-                                'gate',
-                                [self.filter_width,
-                                 self.residual_channels +
-                                     self.local_condition_channels,
-                                 self.dilation_channels])
-                        else:
-                            current['filter'] = create_variable(
-                                'filter',
-                                [self.filter_width,
-                                 self.residual_channels,
-                                 self.dilation_channels])
-                            current['gate'] = create_variable(
-                                'gate',
-                                [self.filter_width,
-                                 self.residual_channels,
-                                 self.dilation_channels])
-                        current['dense'] = create_variable(
-                            'dense',
-                            [1,
-                             self.dilation_channels,
-                             self.residual_channels])
-                        current['skip'] = create_variable(
-                            'skip',
-                            [1,
-                             self.dilation_channels,
-                             self.skip_channels])
+        c = t.add_child('dilated_stack')
+        for i, dilation in enumerate(self.dilations):
+            # with tf.variable_scope('layer{}'.format(i)):
+            l = c.add_child('layer{}'.format(i))
+            if (i == 0 and self.local_condition_channels is not None):
+                input_channels = self.residual_channels + \
+                                 self.local_condition_channels
+            else:
+                input_channels = self.residual_channels
 
-                        if self.global_condition_channels is not None:
-                            current['gc_gateweights'] = create_variable(
-                                'gc_gate',
-                                [1, self.global_condition_channels,
-                                 self.dilation_channels])
-                            current['gc_filtweights'] = create_variable(
-                                'gc_filter',
-                                [1, self.global_condition_channels,
-                                 self.dilation_channels])
+            l.add_param(self._make_spec(
+                name='filter',
+                shape=[self.filter_width,
+                       input_channels,
+                       self.dilation_channels],
+                       kind='filter'))
+            l.add_param(self._make_spec(
+                name='gate',
+                shape=[self.filter_width,
+                       input_channels,
+                       self.dilation_channels],
+                kind='filter'))
+            l.add_param(self._make_spec(
+                name='dense',
+                shape=[1,
+                       self.dilation_channels,
+                       self.residual_channels],
+                kind='filter'))
+            l.add_param(self._make_spec(
+                name='skip',
+                shape=[1,
+                       self.dilation_channels,
+                       self.skip_channels],
+                kind='filter'))
 
-                        if self.use_biases:
-                            current['filter_bias'] = create_bias_variable(
-                                'filter_bias',
-                                [self.dilation_channels])
-                            current['gate_bias'] = create_bias_variable(
-                                'gate_bias',
-                                [self.dilation_channels])
-                            current['dense_bias'] = create_bias_variable(
-                                'dense_bias',
-                                [self.residual_channels])
+            if self.global_condition_channels is not None:
+                l.add_param(self._make_spec(
+                    name='gc_gateweights',
+                    shape=[1, self.global_condition_channels,
+                           self.dilation_channels],
+                    kind='filter'))
 
-                        var['dilated_stack'].append(current)
+                l.add_param(self._make_spec(
+                    name='gc_filtweights',
+                    shape=[1, self.global_condition_channels,
+                           self.dilation_channels],
+                    kind='filter'))
 
-            with tf.variable_scope('postprocessing'):
-                current = dict()
-                current['postprocess1'] = create_variable(
-                    'postprocess1',
-                    [1, self.skip_channels, self.skip_channels])
-                current['postprocess2'] = create_variable(
-                    'postprocess2',
-                    [1, self.skip_channels, self.softmax_channels])
-                if self.use_biases:
-                    current['postprocess1_bias'] = create_bias_variable(
-                        'postprocess1_bias',
-                        [self.skip_channels], 0.0)
-                    current['postprocess2_bias'] = create_bias_variable(
-                        'postprocess2_bias',
-                        [self.skip_channels], 0.0)
-                var['postprocessing'] = current
+            if self.use_biases:
+                l.add_param(self._make_spec(
+                    name='filter_bias',
+                    shape=[self.dilation_channels],
+                    kind='bias'))
+                l.add_param(self._make_spec(
+                    name='gate_bias',
+                    shape=[self.dilation_channels],
+                    kind='bias'))
+                l.add_param(self._make_spec(
+                    name='dense_bias',
+                    shape=[self.residual_channels],
+                    kind='bias'))
 
-        return var
+        c = t.add_child('postprocessing')
+        c.add_param(self._make_spec(
+            name='postprocess1',
+            shape=[1, self.skip_channels, self.skip_channels],
+            kind='filter'))
+
+        c.add_param(self._make_spec(
+            name='postprocess2',
+            shape=[1, self.skip_channels, self.softmax_channels],
+            kind='filter'))
+
+        if self.use_biases:
+            c.add_param(self._make_spec(
+                name='postprocess1_bias',
+                shape=[self.skip_channels],
+                kind='bias'))
+            c.add_param(self._make_spec(
+                name='postprocess2_bias',
+                shape=[self.skip_channels],
+                kind='bias'))
+
+        return t
+
+    def _add_recursively(self, name, newvars, vars):
+        if isinstance(newvars, dict):
+            for child_name in newvars.keys():
+                if isinstance(newvars[child_name], dict):
+                    assert child_name in vars
+                    # Both are dicts
+                    self._add_recursively(child_name, newvars[child_name],
+                                          vars[child_name])
+                else:
+                    # newvars[name] is a param tensor.
+                    self._add_recursively(child_name, newvars[child_name],
+                                          vars)
+        else:
+            # newvars is a variable produced by param_producer_model.
+            vars[name] = newvars
+
+    # Given a recursive dict of parameters produced by a param_producer_model,
+    # add them in to the vars dictionary. Assumes the non-computed parameters
+    # have already been created and added to the self.variables, along with the
+    # levels in the tree.
+    def merge_params(self, newvars):
+        self._add_recursively('', newvars, self.variables)
 
     def _create_dilation_layer(self, input_batch, layer_index, dilation,
                                global_condition_batch, local_condition_batch,
@@ -237,7 +306,8 @@ class WaveNetModel(object):
         are omitted due to the limits of ASCII art.
 
         '''
-        variables = self.variables['dilated_stack'][layer_index]
+        variables = self.variables[TOP_NAME]['dilated_stack'][
+                      'layer{}'.format(layer_index)]
 
         weights_filter = variables['filter']
         weights_gate = variables['gate']
@@ -332,7 +402,7 @@ class WaveNetModel(object):
 
     def _generator_dilation_layer(self, input_batch, state_batch, layer_index,
                                   dilation, global_condition_batch):
-        variables = self.variables['dilated_stack'][layer_index]
+        variables = self.variables[TOP_NAME]['dilated_stack'][layer_index]
 
         weights_filter = variables['filter']
         weights_gate = variables['gate']
@@ -392,11 +462,12 @@ class WaveNetModel(object):
         with tf.name_scope('postprocessing'):
             # Perform (+) -> ReLU -> 1x1 conv -> ReLU -> 1x1 conv to
             # postprocess the output.
-            w1 = self.variables['postprocessing']['postprocess1']
-            w2 = self.variables['postprocessing']['postprocess2']
+            variables = self.variables[TOP_NAME]['postprocessing']
+            w1 = variables['postprocess1']
+            w2 = variables['postprocess2']
             if self.use_biases:
-                b1 = self.variables['postprocessing']['postprocess1_bias']
-                b2 = self.variables['postprocessing']['postprocess2_bias']
+                b1 = variables['postprocess1_bias']
+                b2 = variables['postprocess2_bias']
 
             if self.histograms:
                 tf.histogram_summary('postprocess1_weights', w1)
@@ -471,7 +542,7 @@ class WaveNetModel(object):
         self.push_ops = push_ops
 
         with tf.name_scope('postprocessing'):
-            variables = self.variables['postprocessing']
+            variables = self.variables[TOP_NAME]['postprocessing']
             # Perform (+) -> ReLU -> 1x1 conv -> ReLU -> 1x1 conv to
             # postprocess the output.
             w1 = variables['postprocess1']
@@ -517,7 +588,8 @@ class WaveNetModel(object):
         over a finite set of possible amplitudes.
         '''
         with tf.name_scope('input_embedding'):
-            embedding_table = self.variables['embeddings']['input_embedding']
+            embedding_table = self.variables[TOP_NAME]['embeddings'][
+                                             'input_embedding']
             embedding = tf.nn.embedding_lookup(embedding_table,
                                                input_batch)
             shape = [1, -1, self.residual_channels]
@@ -529,7 +601,8 @@ class WaveNetModel(object):
         if self.global_condition_cardinality is not None:
             # Only lookup the embedding if the global condition is presented
             # as an integer of mutually-exclusive categories ...
-            embedding_table = self.variables['embeddings']['gc_embedding']
+            embedding_table = self.variables[TOP_NAME]['embeddings'][
+                                              'gc_embedding']
             embedding = tf.nn.embedding_lookup(embedding_table,
                                                global_condition)
         elif global_condition is not None:

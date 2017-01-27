@@ -43,8 +43,8 @@ class TestParamMerge(tf.test.TestCase):
             name='sample_density',
             opts={'quant_levels':100, 'range_min':0.5, 'range_max':1.5})
 
-        show_param_tree(self.text_encoder.param_specs)
-        print("=======================================")
+        # show_param_tree(self.text_encoder.param_specs)
+        # print("=======================================")
         self.parameter_producer = ParamProducerModel(
             input_spec=input_spec,
             output_specs=self.text_encoder.param_specs,
@@ -62,13 +62,15 @@ class TestParamMerge(tf.test.TestCase):
     def testParamMerge(self):
         encoder_params = self.parameter_producer.create_params(
             input_value=self.sample_density_placeholder)
+        print("============================================")
         print("params before:")
         show_params(self.text_encoder.variables)
+
         self.text_encoder.merge_params(encoder_params)
+
         print("======================================")
         print("params after:")
         show_params(self.text_encoder.variables)
-#        print("params after:{}".format(self.text_encoder.variables))
 
 if __name__ == '__main__':
     tf.test.main()

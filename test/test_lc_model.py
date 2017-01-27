@@ -33,8 +33,11 @@ UPSAMPLE_RATE = 200
 MEDIAN_SAMPLES_PER_CHAR = 200
 LAYER_COUNT = 6
 TEXT_ENCODER_CHANNELS = 16
+TEXT_ENCODER_CHANNELS_NON_DILATED = 256
 TEXT_ENCODER_OUTPUT_CHANNELS = 16 # 128 # 512
 LOCAL_CONDITION_CHANNELS = 16
+LARGEST_DURATION_RATIO = 1.2
+SMALLEST_DURATION_RATIO=0.8
 
 def ascii_to_text(ascii):
     return [chr(code) for code in ascii]
@@ -345,7 +348,7 @@ class TestLCNet(tf.test.TestCase):
         longest_text_length = 30
         generation_seconds = longest_text_length * UPSAMPLE_RATE * \
                              sample_period
-        largest_duration_ratio = 1.4
+        largest_duration_ratio = LARGEST_DURATION_RATIO
         max_generation_samples = generation_seconds * SAMPLE_RATE_HZ
 
         # Create the time sequence that corresponds to the longest sample
@@ -372,7 +375,8 @@ class TestLCNet(tf.test.TestCase):
 
     def _make_training_pair(self):
          text = self._make_text_sequence()
-         duration_ratio = 0.8*np.random.random_sample() + 0.6
+         duration_delta = LARGEST_DURATION_RATIO - SMALLEST_DURATION_RATIO
+         duration_ratio = duration_delta*np.random.random_sample() + SMALLEST_DURATION_RATIO
          waveform = self.make_training_waveform(text,
                                                 duration_ratio=duration_ratio)
 #         padded_text = self._pad_text(text)
@@ -396,8 +400,9 @@ class TestLCNet(tf.test.TestCase):
 
         if duration_ratios is None:
             duration_ratios = []
+            duration_ratio_delta = LARGEST_DURATION_RATIO - SMALLEST_DURATION_RATIO
             for i in range(len(text_sequences)):
-                ratio = 0.8*np.random.random_sample() + 0.6
+                ratio = duration_ratio_delta*np.random.random_sample() + SMALLEST_DURATION_RATIO
                 duration_ratios.append(ratio)
 
 
@@ -604,8 +609,10 @@ class TestHyperTraining(TestLCNet):
         print('TestHyperNetWithLocalConditioning setup.')
         sys.stdout.flush()
 
-        self.optimizer_type = 'adam'
-        self.learning_rate = 0.0004
+#        self.optimizer_type = 'adam'
+#        self.learning_rate = 0.0004
+        self.optimizer_type = 'sgd'
+        self.learning_rate = 0.01
         self.generate = True
         self.momentum = 0.9
         self.global_conditioning = False
@@ -622,34 +629,43 @@ class TestHyperTraining(TestLCNet):
             skip_channels=256,
             local_condition_channels=LOCAL_CONDITION_CHANNELS,
             ctc_loss=False,
-            gated_linear=False)
+            gated_linear=False,
+            compute_the_params=True,
+            # This set of non-computed params leaves only the time conv
+            # filters to be computed, since those are the ones that need to
+            # be conditioned upon the sample density (audio samples per char).
+            non_computed_params=['embedding',
+                                 'dense',
+                                 'skip',
+                                 'gc_gateweights',
+                                 'gc_filtweights',
+                                 'filter_bias',
+                                 'gate_bias',
+                                 'postprocess1',
+                                 'postprocess2'])
 
         # Create text encoder network.
         self.text_encoder = ConvNetModel(
-            encoder_channels=TEXT_ENCODER_CHANNELS,
+            encoder_channels=TEXT_ENCODER_CHANNELS_NON_DILATED,
             histograms=False,
             output_channels=TEXT_ENCODER_OUTPUT_CHANNELS,
             local_condition_channels=LOCAL_CONDITION_CHANNELS,
-            layer_count=None,
-            dilations=[1, 2, 4, 8, 16, 32, 64, 128, 256,
-                       1, 2, 4, 8, 16, 32, 64, 128, 256,
-                       1, 2, 4, 8, 16, 32, 64, 128, 256],
+            layer_count=3,
+            dilations=None,
             gated_linear=False,
             density_conditioned=False,
-            compute_the_params=True,
-            non_computed_params=['text_embedding'])
-
+            compute_the_params=False)
 
         input_spec = InputSpec(
             kind='quantized_scalar',
             name='sample_density',
-            opts={'quant_levels':100, 'range_min':0.5, 'range_max':1.5})
+            opts={'quant_levels':21, 'range_min':SMALLEST_DURATION_RATIO,
+                    'range_max': LARGEST_DURATION_RATIO})
 
         self.parameter_producer = ParamProducerModel(
             input_spec=input_spec,
-            output_specs=self.text_encoder.param_specs,
-            residual_channels=256)
-
+            output_specs=self.net.param_specs,
+            residual_channels=1024)
 
         self.audio_placeholder = tf.placeholder(dtype=tf.float32, name='audio_placeholder')
         self.gc_placeholder = tf.placeholder(dtype=tf.int32, name='gc_placeholder')  \
@@ -677,13 +693,12 @@ class TestHyperTraining(TestLCNet):
         # parameter_producer.
         encoder_params = self.parameter_producer.create_params(
             input_value=sample_density)
-        self.text_encoder.merge_params(encoder_params)
+        self.net.merge_params(encoder_params)
 
         #show_params(self.text_encoder.variables)
 
         local_conditions = self.text_encoder.upsample(
             self.ascii_placeholder, audio_length, sample_density)
-
 
         loss = self.net.loss(input_batch=self.audio_placeholder,
                              global_condition_batch=self.gc_placeholder,

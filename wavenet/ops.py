@@ -89,6 +89,7 @@ def gated_residual_layer(input, layer_name):
         output = input + t1*t2
         return output
 
+
 def quantize_value(value, quant_levels, min, max):
     assert max > min
     assert quant_levels > 1
@@ -144,6 +145,8 @@ def causal_conv(value, filter_, dilation, name='causal_conv'):
 def mu_law_encode(audio, quantization_channels):
     '''Quantizes waveform amplitudes.'''
     with tf.name_scope('encode'):
+        # Fix the ever-so-slightly out-of-range case.
+        audio = tf.minimum(1.0, tf.maximum(audio, -1.0))
         mu = quantization_channels - 1
         # Perform mu-law companding transformation (ITU-T, 1988).
         magnitude = tf.log(1 + mu * tf.abs(audio)) / tf.log(1. + mu)

@@ -1,7 +1,7 @@
 import numpy as np
 import tensorflow as tf
 from .ops import (quantize_sample_density, create_variable,
-                  create_embedding_table, create_bias_variable)
+                  create_embedding_table, create_bias_variable, show_params)
 from .paramspec import (create_vars, StoredParm, ComputedParm,
                         ParamTree, create_var)
 
@@ -26,13 +26,11 @@ class ConvNetModel(object):
         self.histograms = histograms
         self.output_channels = output_channels
         self.local_condition_channels = local_condition_channels
+        self.layer_count = layer_count
         if layer_count is None:
             self.layer_count = len(dilations)
         elif dilations is not None:
             assert(len(dilations) == layer_count)
-            self.layer_count=layer_count
-        else:
-            assert(False)
 
         print("self.layer_count:{}".format(self.layer_count))
         self.skip_cuts = []
@@ -63,8 +61,18 @@ class ConvNetModel(object):
             return size
 
     def _make_spec(self, name, shape, kind):
+        def has_match(name, tokens):
+            match = False
+            for token in tokens:
+                if token in name:
+                    match = True
+                    break
+            return match
+
         if self.compute_the_params:
-            if name in self.non_computed_params:
+            # non_computed_params is list of tokens, such that if that token
+            # appears in the parameter name, it is not computed.
+            if has_match(name, self.non_computed_params):
                 return StoredParm(name=name, shape=shape, kind=kind)
             else:
                 return ComputedParm(name=name, shape=shape, kind=kind)
@@ -191,13 +199,12 @@ class ConvNetModel(object):
     def _create_vars(self):
         self.param_specs = self.create_param_specs()
 
-        print("Paramspecs:{}".format(self.param_specs))
-        # Strip the top element off; it's just the name of the
-        # net.
-        self.param_specs = self.param_specs  # self.param_specs.children[0]
         return create_vars(spec_tree=self.param_specs,
+                                  # False because these are the stored, not
+                                  # computed params.
                                   computed_not_stored=False,
                                   parm_factory=create_var)
+
 
     def _create_layer(self, input, layer_index, output_width, dilation,
                       density_embedding):
@@ -308,7 +315,7 @@ class ConvNetModel(object):
 
         return density_embedding
 
-    def _create_network(self, input_batch, audio_length, sample_density):
+    def _create_network(self, input_batch, ascii_length, sample_density):
         with tf.name_scope('layer_stack'):
             skip_outs = []
             current_layer = input_batch
@@ -318,7 +325,7 @@ class ConvNetModel(object):
                     else None
                 with tf.name_scope('layer{}'.format(i)):
                     output, current_layer = self._create_layer(
-                        current_layer, i, audio_length, dilation,
+                        current_layer, i, ascii_length, dilation,
                         density_embedding)
                     skip_outs.append(output)
                     if current_layer is not None:
@@ -357,28 +364,31 @@ class ConvNetModel(object):
 
     def _upsample(self, embedding, audio_length, sample_density):
         with tf.name_scope('upsampling'):
-
             # Number of samples we've currently got if we preserve density.
             number_samples = sample_density * tf.cast(
                 tf.shape(embedding)[1], dtype=tf.float32)
             number_samples = tf.cast(tf.ceil(number_samples), dtype=tf.int32)
 
-            # Reshape so we can use image resize on it: height = 1
-            embedding = tf.expand_dims(embedding, axis=1)
-            upsampled = tf.image.resize_bilinear(embedding,
-                                                 [1, number_samples])
-            # Remove the dummy "height=1" dimension we added for the resize
-            # to bring it back to batch x duration x channels.
-            upsampled = tf.squeeze(upsampled, axis=1)
+            with tf.control_dependencies([tf.assert_equal(number_samples,
+                                          audio_length)]):
+                # Reshape so we can use image resize on it: height = 1
+                embedding = tf.expand_dims(embedding, axis=1)
+#            upsampled = tf.image.resize_bilinear(embedding,
+#                                                 [1, number_samples])
+                upsampled = tf.image.resize_bilinear(embedding,
+                                                    [1, number_samples])
+                # Remove the dummy "height=1" dimension we added for the resize
+                # to bring it back to batch x duration x channels.
+                upsampled = tf.squeeze(upsampled, axis=1)
 
-            # Desired number of samples
-            audio_padding = self._receptive_field() // 2
-            desired_samples = audio_length + 2 * audio_padding
-            cut_size = (number_samples - desired_samples) // 2
+#            # Desired number of samples
+#            audio_padding = self._receptive_field() // 2
+#            desired_samples = audio_length + 2 * audio_padding
+#            cut_size = (number_samples - desired_samples) // 2
 
-            upsampled = tf.slice(upsampled,
-                                 [0, cut_size, 0],
-                                 [-1, desired_samples, -1])
+#            upsampled = tf.slice(upsampled,
+#                                 [0, cut_size, 0],
+#                                 [-1, desired_samples, -1])
             return upsampled
 
 
@@ -388,13 +398,13 @@ class ConvNetModel(object):
                                                              dtype=tf.float32)
         return tf.cast(tf.ceil(float_padding), dtype=tf.int32)
 
-    def _embed_ascii(self, ascii, audio_length):
+    def _embed_ascii(self, ascii):
         with tf.name_scope('input_embedding'):
-            audio_pad_size = self._receptive_field() // 2
-            char_pad = self._compute_character_padding(audio_pad_size,
-                audio_length)
+            char_pad = self._receptive_field() // 2
             # Put entries of 0 on either side of the input time
-            # series (dimension 1).
+            # series (dimension 1). This will make the output of the
+            # character-resolution portion of the net have exactly the same
+            # width as the input string (width=number of characters).
             padded_ascii = tf.pad(ascii, [[char_pad, char_pad]]) # dim1
             embedding_table = self.variables[TOP_NAME]['embeddings'
                                   ]['text_embedding']
@@ -408,8 +418,12 @@ class ConvNetModel(object):
     def upsample(self, input_text, audio_length, sample_density):
         with tf.name_scope('text_conv_net'):
             self.text_shape = tf.shape(input_text)
-            embedding = self._embed_ascii(input_text, audio_length)
-            upsampled = self._upsample(embedding, audio_length, sample_density)
-            out = self._create_network(upsampled, audio_length, sample_density)
-        return out
+            embedding = self._embed_ascii(input_text)
+            # The 'output' is still character-resolution. Has the same width
+            # as the input ascii string.
+            output = self._create_network(embedding, self.text_shape[0],
+                                                      sample_density)
+            upsampled = self._upsample(output, audio_length, sample_density)
+
+        return upsampled
 

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
+import numpy as np
 import tensorflow as tf
-
 
 def create_variable_from_spec(param_spec):
     '''Create a convolution filter variable with the specified name and shape,
@@ -16,7 +16,7 @@ def create_embedding_table_from_spec(param_spec):
     assert len(param_spec.shape) == 2
     if param_spec.shape[0] == param_spec.shape[1]:
         # Make a one-hot encoding as the initial value.
-        initial_val = np.identity(n=param_spec.shape[0], dtype=param_spec.dtype)
+        initial_val = np.identity(n=param_spec.shape[0], dtype=np.float32)
         return tf.Variable(initial_val, name=param_spec.name)
     else:
         initializer = tf.truncated_normal(param_spec.shape,
