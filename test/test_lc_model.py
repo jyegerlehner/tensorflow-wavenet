@@ -613,10 +613,12 @@ class TestHyperTraining(TestLCNet):
 #        self.learning_rate = 0.0004
         self.optimizer_type = 'sgd'
         self.learning_rate = 0.01
+#        self.optimizer_type = 'rmsprop'
+#        self.learning_rate = 0.001
         self.generate = True
         self.momentum = 0.9
         self.global_conditioning = False
-        self.train_iters = 30000
+        self.train_iters = 50000
         self.net = WaveNetModel(
             dilations=[1, 2, 4, 8, 16, 32, 64, 128, 256,
                        1, 2, 4, 8, 16, 32, 64, 128, 256,
