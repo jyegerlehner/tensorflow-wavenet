@@ -1,7 +1,8 @@
 import numpy as np
 import tensorflow as tf
 from .ops import (quantize_sample_density, create_variable,
-                  create_embedding_table, create_bias_variable, show_params)
+                  create_embedding_table, create_bias_variable, show_params,
+                  quantize_interp_embedding)
 from .paramspec import (create_vars, StoredParm, ComputedParm,
                         ParamTree, create_var)
 
@@ -9,6 +10,9 @@ DENSITY_QUANT_LEVELS = 50
 CHARACTER_CARDINALITY = 256
 FILTER_WIDTH = 2
 TOP_NAME = 'encoder_convnet'
+MIN_SAMPLE_DENSITY = 500.0
+MAX_SAMPLE_DENSITY = 2000.0
+
 
 class ConvNetModel(object):
     def __init__(self,
@@ -305,14 +309,17 @@ class ConvNetModel(object):
     def _density_embedding(self, sample_density):
         if not self.density_conditioned:
             return None
-        quantized_density = quantize_sample_density(
-            sample_density, DENSITY_QUANT_LEVELS)
+
+        sample_density = tf.reshape(sample_density, [1])
         table = self.variables[TOP_NAME]['embeddings']['density_embedding']
-        density_embedding = tf.nn.embedding_lookup(table,
-                                                   quantized_density)
+        density_embedding = quantize_interp_embedding(
+            value=sample_density,
+            quant_levels=DENSITY_QUANT_LEVELS,
+            min=MIN_SAMPLE_DENSITY,
+            max=MAX_SAMPLE_DENSITY,
+            embedding_table=table)
         shape = [1, 1, self.encoder_channels]
         density_embedding = tf.reshape(density_embedding, shape)
-
         return density_embedding
 
     def _create_network(self, input_batch, ascii_length, sample_density):

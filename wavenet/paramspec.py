@@ -7,8 +7,12 @@ def create_variable_from_spec(param_spec):
     '''Create a convolution filter variable with the specified name and shape,
     and initialize it using Xavier initialition.'''
     initializer = tf.contrib.layers.xavier_initializer_conv2d()
-    variable = tf.Variable(initializer(shape=param_spec.shape),
-                                       name=param_spec.name)
+    if param_spec.initial_value is None:
+        variable = tf.Variable(initializer(shape=param_spec.shape),
+                                           name=param_spec.name)
+    else:
+        # variable = tf.Variable(initial_value=param_spec.initial_value)
+        variable = tf.constant(value=param_spec.initial_value)
     return variable
 
 
@@ -59,6 +63,16 @@ class ParamTree:
         self.children.append(subtree)
         return subtree
 
+def print_param(spec):
+    print("Param:{}".format(spec.name))
+    print("   Computed:{}".format(spec.computed_not_stored))
+    size = 1
+    for dim in spec.shape:
+        size = size * dim
+    print("   Size:{} floats".format(size))
+    print("   Kind:{}".format(spec.kind))
+    print("")
+
 
 class ParamSpec:
     def __init__(self, name, shape, kind, dtype=tf.float32):
@@ -75,14 +89,18 @@ class ParamSpec:
         return siz
 
 class StoredParm(ParamSpec):
-    def __init__(self, name, shape, kind, dtype=tf.float32):
+    def __init__(self, name, shape, kind, dtype=tf.float32,
+                 initial_value=None):
         ParamSpec.__init__(self, name, shape, kind, dtype)
         self.computed_not_stored = False
+        self.initial_value = initial_value
 
 class ComputedParm(ParamSpec):
-    def __init__(self, name, shape, kind, dtype=tf.float32):
+    def __init__(self, name, shape, kind, dtype=tf.float32,
+                 initial_value=None):
         ParamSpec.__init__(self, name, shape, kind, dtype)
         self.computed_not_stored = True
+        self.initial_value=initial_value
 
 def make_variable(param_spec):
     return create_var(name=param_spec.name,
@@ -90,8 +108,8 @@ def make_variable(param_spec):
                       type=param_spec.type)
 
 variable_factory = {'filter': create_variable_from_spec,
-                    'bias':create_bias_variable_from_spec,
-                    'embedding':create_embedding_table_from_spec}
+                    'bias': create_bias_variable_from_spec,
+                    'embedding': create_embedding_table_from_spec}
 
 def create_var(param_spec):
     assert param_spec.kind in variable_factory
@@ -126,6 +144,8 @@ def create_vars(spec_tree, computed_not_stored, parm_factory, parent=None):
         for param_spec in spec_tree.params:
             if param_spec.computed_not_stored == computed_not_stored:
                 assert param_spec.name not in layer
+                if computed_not_stored:
+                    print_param(param_spec)
                 layer[param_spec.name] = parm_factory(param_spec)
 
         for item in spec_tree.children:

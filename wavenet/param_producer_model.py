@@ -5,7 +5,8 @@ from .paramspec import (create_vars, StoredParm, ComputedParm,
                         ParamTree, create_var)
 
 from .ops import (quantize_value, create_variable, create_embedding_table,
-                  create_bias_variable, gated_residual_layer, shape_size)
+                  create_bias_variable, gated_residual_layer, shape_size,
+                  quantize_interp_embedding)
 
 # This is used for the size of the representation vector in the net,
 # including the input's embedding size all the way up until the
@@ -26,16 +27,18 @@ class ParamFactory:
     Given a param spec, produce an output matching the spec.
     '''
     def  __call__(self, param_spec):
-        # Project from channels of the input to the required channels
-        # for the parameter.
 
-        proj_weights = create_variable(name="project",
-            shape=[shape_size(self.input.get_shape()), param_spec.size()])
-        current = tf.matmul(self.input, proj_weights)
+        current = self.input
         for i in range(OUT_SPECIFIC_LAYER_COUNT):
             layer_name = param_spec.name + "_layer{}".format(i)
             current = gated_residual_layer(current,
                                            layer_name)
+
+        # Project from channels of the input to the required channels
+        # for the parameter.
+        proj_weights = create_variable(name="project",
+            shape=[shape_size(self.input.get_shape()), param_spec.size()])
+        current = tf.matmul(current, proj_weights)
 
         # We created it as a flat vector; reshape to desired shape.
         current = tf.reshape(current, param_spec.shape)
@@ -95,17 +98,19 @@ class ParamProducerModel:
 
     def _encode_quantized_scalar(self, input_value):
         with tf.variable_scope(self.input_spec.name):
+            if len(input_value.get_shape()) == 0:
+                input_value = tf.reshape(input_value, [1])
             quant_levels = self.input_spec.opts['quant_levels']
-            quantized = quantize_value(value=input_value,
-                            quant_levels=quant_levels,
-                            min=self.input_spec.opts['range_min'],
-                            max=self.input_spec.opts['range_max'])
-            table_shape = [quant_levels, self.residual_channels]
+            table_shape = [quant_levels+1, self.residual_channels]
             table = create_embedding_table(
                             name=self.input_spec.name+"_embedding_table",
                             shape=table_shape)
-            #return tf.gather_nd(table, quantized)
-            vect = tf.nn.embedding_lookup(table, quantized)
+            vect = quantize_interp_embedding(
+                                    value=input_value,
+                                    quant_levels=quant_levels,
+                                    min=self.input_spec.opts['range_min'],
+                                    max=self.input_spec.opts['range_max'],
+                                    embedding_table=table)
             vect = tf.reshape(vect, [1, -1])
             return vect
 
@@ -141,6 +146,9 @@ class ParamProducerModel:
             middle_representation = self._encode_input(input_value)
             middle_representation = self._common_layers(middle_representation)
 
+            print("====================================================")
+            print("Param Factory")
+            print("====================================================")
             param_factory = ParamFactory(middle_representation)
 
             # Create the recursive dict-of-dicts of tensors that the

@@ -12,7 +12,8 @@ import random
 from wavenet import (WaveNetModel, time_to_batch, batch_to_time, causal_conv,
                      optimizer_factory, mu_law_decode, ConvNetModel,
                      InputSpec, ParamProducerModel, show_param_tree,
-                     show_params)
+                     show_params, quantize_value, create_embedding_table,
+                     quantize_interp_embedding)
 
 LAYER_COUNT = 6
 TEXT_ENCODER_CHANNELS = 8
@@ -59,18 +60,57 @@ class TestParamMerge(tf.test.TestCase):
         self.sample_density_placeholder = tf.placeholder(dtype=tf.float32,
                                                          shape=[1,1])
 
-    def testParamMerge(self):
-        encoder_params = self.parameter_producer.create_params(
-            input_value=self.sample_density_placeholder)
-        print("============================================")
-        print("params before:")
-        show_params(self.text_encoder.variables)
+#    def testParamMerge(self):
+#        encoder_params = self.parameter_producer.create_params(
+#            input_value=self.sample_density_placeholder)
+#        print("============================================")
+#        print("params before:")
+#        show_params(self.text_encoder.variables)
 
-        self.text_encoder.merge_params(encoder_params)
+#        self.text_encoder.merge_params(encoder_params)
 
-        print("======================================")
-        print("params after:")
-        show_params(self.text_encoder.variables)
+#        print("======================================")
+#        print("params after:")
+#        show_params(self.text_encoder.variables)
+
+
+    def testInterpolatedEmbedding(self):
+
+        QUANT_LEVELS = 3
+        channels = 4
+        np_table = np.array([[1.0, 0.0, 0.0, 0.0],
+                             [0.0, 1.0, 0.0, 0.0],
+                             [0.0, 0.0, 1.0, 0.0],
+                             [0.0, 0.0, 0.0, 1.0]], dtype=np.float32)
+
+        table_shape = [QUANT_LEVELS+1, channels]
+
+        table = tf.constant(value=np_table,
+                            shape=table_shape,
+                            verify_shape=True)
+
+        # np_vals = np.array([0.1*i for i in range(60)], dtype=np.float32)
+        np_vals = np.array([0.0, 1.0, 2.0], dtype=np.float32)
+
+        interpolated_embedding = quantize_interp_embedding(
+                                    value=tf.constant(np_vals),
+                                    quant_levels=QUANT_LEVELS,
+                                    min=0.0,
+                                    max=6.0,
+                                    embedding_table=table)
+
+        with self.test_session() as sess:
+            embedding = sess.run(interpolated_embedding)
+
+        expected_embedding = np.array([[1.0, 0.0, 0.0, 0.0],
+                                       [0.5, 0.5, 0.0, 0.0],
+                                       [0.0, 1.0, 0.0, 0.0]])
+
+        np.testing.assert_allclose(embedding, expected_embedding, rtol=0.001)
+
+
+
+
 
 if __name__ == '__main__':
     tf.test.main()

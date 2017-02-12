@@ -9,7 +9,7 @@ import librosa
 import random
 import unittest
 from wavenet import (WaveNetModel, time_to_batch, batch_to_time, causal_conv,
-                     optimizer_factory, mu_law_decode)
+                     optimizer_factory, mu_law_decode, FrequencyDomainLoss)
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
@@ -107,8 +107,6 @@ def generate_waveforms(sess, net, fast_generation, global_condition):
     gc_placeholder = tf.placeholder(tf.int32) if global_condition is not None \
         else None
 
-    net.batch_size = 1
-
     if fast_generation:
         next_sample_probs = net.predict_proba_incremental(samples_placeholder,
                                                           global_condition)
@@ -185,15 +183,15 @@ class TestNet(tf.test.TestCase):
         print('TestNet setup.')
         sys.stdout.flush()
 
-        self.optimizer_type = 'sgd'
-        self.learning_rate = 0.02
-        self.generate = False
+        self.max_allowed_loss = 0.1
+        self.optimizer_type = 'rmsprop'
+        self.learning_rate = 0.001
+        self.generate = True
         self.momentum = MOMENTUM
         self.global_conditioning = False
         self.local_conditioning = False
         self.train_iters = TRAIN_ITERATIONS
-        self.net = WaveNetModel(batch_size=1,
-                                dilations=[1, 2, 4, 8, 16, 32, 64,
+        self.net = WaveNetModel(dilations=[1, 2, 4, 8, 16, 32, 64,
                                            1, 2, 4, 8, 16, 32, 64],
                                 filter_width=2,
                                 residual_channels=32,
@@ -203,6 +201,7 @@ class TestNet(tf.test.TestCase):
                                 global_condition_channels=None,
                                 global_condition_cardinality=None,
                                 local_condition_channels=None)
+
 
     def _save_net(self, sess):
         saver = tf.train.Saver(var_list=tf.trainable_variables())
@@ -272,10 +271,12 @@ class TestNet(tf.test.TestCase):
         init = tf.initialize_all_variables()
 
         generated_waveform = None
-        max_allowed_loss = 0.1
-        loss_val = max_allowed_loss
+        loss_val = self.max_allowed_loss
         initial_loss = None
         operations = [loss, optim]
+        entropy_loss = self.net.entropy_loss
+        if entropy_loss is not None:
+            operations.append(entropy_loss)
         with self.test_session() as sess:
             feed_dict, speaker_index = CreateTrainingFeedDict(
                 audio, speaker_ids, audio_placeholder,
@@ -288,19 +289,22 @@ class TestNet(tf.test.TestCase):
                     lc_placeholder, local_conditions)
                 [results] = sess.run([operations], feed_dict=feed_dict)
                 if i % 10 == 0:
-                    print("i: %d loss: %f" % (i, results[0]))
+                    if entropy_loss is not None:
+                        print("i:{} loss:{} entropy loss:{}".format(i, results[0], results[2]))
+                    else:
+                        print("i:{} loss:{}".format(i, results[0]))
+
 
             loss_val = results[0]
 
             # Sanity check the initial loss was larger.
-            self.assertGreater(initial_loss, max_allowed_loss)
+            self.assertGreater(initial_loss, self.max_allowed_loss)
 
             # Loss after training should be small.
-            self.assertLess(loss_val, max_allowed_loss)
+            self.assertLess(loss_val, self.max_allowed_loss)
 
-            # Loss should be at least two orders of magnitude better
-            # than before training.
-            self.assertLess(loss_val / initial_loss, 0.02)
+            # Loss should be better than before training.
+            self.assertLess(loss_val / initial_loss, 0.2)
 
             if self.generate:
                 if self.global_conditioning:
@@ -344,39 +348,38 @@ class TestNet(tf.test.TestCase):
 #                        self.assertGreater, generated_waveforms[0], None)
 
 
-#class TestNetWithBiases(TestNet):
+class TestNetWithBiases(TestNet):
 
-#    def setUp(self):
-#        print('TestNetWithBias setup.')
-#        sys.stdout.flush()
+    def setUp(self):
+        print('TestNetWithBias setup.')
+        sys.stdout.flush()
 
-#        self.local_conditioning = False
-#        self.net = WaveNetModel(batch_size=1,
-#                                dilations=[1, 2, 4, 8, 16, 32, 64,
-#                                           1, 2, 4, 8, 16, 32, 64],
-#                                filter_width=2,
-#                                residual_channels=32,
-#                                dilation_channels=32,
-#                                quantization_channels=QUANTIZATION_CHANNELS,
-#                                use_biases=True,
-#                                skip_channels=32)
-#        self.optimizer_type = 'sgd'
-#        self.learning_rate = 0.02
-#        self.generate = False
-#        self.momentum = MOMENTUM
-#        self.global_conditioning = False
-#        self.train_iters = TRAIN_ITERATIONS
+        self.max_allowed_loss = 0.1
+        self.local_conditioning = False
+        self.net = WaveNetModel(dilations=[1, 2, 4, 8, 16, 32, 64,
+                                           1, 2, 4, 8, 16, 32, 64],
+                                filter_width=2,
+                                residual_channels=32,
+                                dilation_channels=32,
+                                quantization_channels=QUANTIZATION_CHANNELS,
+                                use_biases=True,
+                                skip_channels=32)
+        self.optimizer_type = 'sgd'
+        self.learning_rate = 0.02
+        self.generate = False
+        self.momentum = MOMENTUM
+        self.global_conditioning = False
+        self.train_iters = TRAIN_ITERATIONS
 
 
 class TestNetWithRMSProp(TestNet):
-
     def setUp(self):
         print('TestNetWithRMSProp setup.')
         sys.stdout.flush()
 
+        self.max_allowed_loss = 0.1
         self.local_conditioning = False
-        self.net = WaveNetModel(batch_size=1,
-                                dilations=[1, 2, 4, 8, 16, 32, 64,
+        self.net = WaveNetModel(dilations=[1, 2, 4, 8, 16, 32, 64,
                                            1, 2, 4, 8, 16, 32, 64],
                                 filter_width=2,
                                 residual_channels=32,
@@ -386,36 +389,35 @@ class TestNetWithRMSProp(TestNet):
                                 use_biases=True)
         self.optimizer_type = 'rmsprop'
         self.learning_rate = 0.001
-        self.generate = True
+        self.generate = False
         self.momentum = MOMENTUM
         self.train_iters = TRAIN_ITERATIONS
         self.global_conditioning = False
 
 
-#class TestNetWithScalarInput(TestNet):
-
+#class TestNetWithFreqDomainLoss(TestNet):
 #    def setUp(self):
-#        print('TestNetWithScalarInput setup.')
+#        print('TestNetWithFreqDomainLoss setup.')
 #        sys.stdout.flush()
 
 #        self.local_conditioning = False
-#        self.net = WaveNetModel(batch_size=1,
-#                                dilations=[1, 2, 4, 8, 16, 32, 64,
+#        self.net = WaveNetModel(dilations=[1, 2, 4, 8, 16, 32, 64,
 #                                           1, 2, 4, 8, 16, 32, 64],
 #                                filter_width=2,
 #                                residual_channels=32,
 #                                dilation_channels=32,
 #                                quantization_channels=QUANTIZATION_CHANNELS,
+#                                skip_channels=256,
 #                                use_biases=True,
-#                                skip_channels=32,
-#                                scalar_input=True,
-#                                initial_filter_width=4)
-#        self.optimizer_type = 'sgd'
-#        self.learning_rate = 0.01
-#        self.generate = False
+#                                frequency_domain_loss=True,
+#                                sample_rate=SAMPLE_RATE_HZ)
+#        self.optimizer_type = 'rmsprop'
+#        self.learning_rate = 0.00005
+#        self.generate = True
 #        self.momentum = MOMENTUM
+#        self.train_iters = 20000 # TRAIN_ITERATIONS
 #        self.global_conditioning = False
-#        self.train_iters = 1200
+#        self.max_allowed_loss  = 2.0
 
 
 #class TestNetWithGlobalConditioning(TestNet):
@@ -423,6 +425,7 @@ class TestNetWithRMSProp(TestNet):
 #        print('TestNetWithGlobalConditioning setup.')
 #        sys.stdout.flush()
 
+#        self.max_allowed_loss = 0.1
 #        self.optimizer_type = 'sgd'
 #        self.learning_rate = 0.01
 #        self.generate = True
@@ -430,8 +433,7 @@ class TestNetWithRMSProp(TestNet):
 #        self.global_conditioning = True
 #        self.train_iters = 1000
 #        self.local_conditioning = False
-#        self.net = WaveNetModel(batch_size=NUM_SPEAKERS,
-#                                dilations=[1, 2, 4, 8, 16, 32, 64,
+#        self.net = WaveNetModel(dilations=[1, 2, 4, 8, 16, 32, 64,
 #                                           1, 2, 4, 8, 16, 32, 64],
 #                                filter_width=2,
 #                                residual_channels=32,

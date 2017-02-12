@@ -1,10 +1,7 @@
 from __future__ import division
 
+import numpy as np
 import tensorflow as tf
-
-MIN_SAMPLE_DENSITY = 500.0
-MAX_SAMPLE_DENSITY = 2000.0
-DENSITY_SPAN = MAX_SAMPLE_DENSITY - MIN_SAMPLE_DENSITY
 
 
 def show_params(params, indent=""):
@@ -90,13 +87,43 @@ def gated_residual_layer(input, layer_name):
         return output
 
 
+def quantize_interp_embedding(value, quant_levels, min, max, embedding_table):
+    (lower_bound, upper_bound, interp_ratio) = quantize_value(
+            value=value,
+            quant_levels=quant_levels,
+            min=0.0,
+            max=6.0)
+    interpolated_embedding = interpolate_embeddings(
+              lower_bound, upper_bound, interp_ratio, embedding_table)
+    return interpolated_embedding
+
+
 def quantize_value(value, quant_levels, min, max):
     assert max > min
     assert quant_levels > 1
+    EPSILON = 1e-7
     value = clamp(value, min, max)
-    ratio = (value - min) / (max - min)
-    quant = tf.cast(tf.floor(ratio*quant_levels), dtype=tf.int32)
-    return quant
+    # Add EPSILON so ratio never gets to exactly 1.0
+    ratio = (value - min) / (EPSILON + max - min)
+    lower_bound = tf.cast(tf.floor(ratio*quant_levels), dtype=tf.int32)
+    upper_bound = lower_bound + 1
+    # Width of each quantization levels
+    delta = tf.cast((max - min) / quant_levels, dtype=tf.float32)
+    interp_ratio = tf.cast((value - tf.cast(lower_bound, dtype=tf.float32)*delta) / delta, dtype=tf.float32)
+    return (lower_bound, upper_bound, interp_ratio)
+
+
+def interpolate_embeddings(lower_index, upper_index, ratio, embedding_table):
+    lower_vect = tf.nn.embedding_lookup(embedding_table, lower_index)
+    upper_vect = tf.nn.embedding_lookup(embedding_table, upper_index)
+    # Interpolate between the upper and lower bounds.
+    ratio = tf.reshape(ratio, [int(ratio.get_shape()[0]), 1])
+    scalar = tf.cast(1.0, dtype=tf.float32) - ratio
+    # scalar = tf.reshape(scalar, [int(scalar.get_shape()[0]), 1])
+    vect1 = scalar * lower_vect
+    vect2 = ratio * upper_vect
+    vect = vect1 + vect2
+    return vect
 
 
 def quantize_sample_density(density, quant_levels):

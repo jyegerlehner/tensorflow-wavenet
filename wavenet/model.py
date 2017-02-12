@@ -5,6 +5,8 @@ from .ops import (causal_conv, mu_law_encode, mu_law_decode, create_variable,
                   create_embedding_table, create_bias_variable)
 from .paramspec import (create_vars, StoredParm, ComputedParm,
                         ParamTree, create_var)
+from .frequency_domain_loss import (output_to_probs, FrequencyDomainLoss,
+                                    probs_to_entropy_bits)
 
 
 TOP_NAME = 'wavenet'
@@ -39,10 +41,11 @@ class WaveNetModel(object):
                  global_condition_channels=None,
                  global_condition_cardinality=None,
                  local_condition_channels=None,
-                 ctc_loss=False,
                  gated_linear=False,
                  compute_the_params=False,
-                 non_computed_params=None):
+                 non_computed_params=None,
+                 frequency_domain_loss=False,
+                 sample_rate=None):
         '''Initializes the WaveNet model.
 
         Args:
@@ -77,8 +80,6 @@ class WaveNetModel(object):
                 categories, where N = global_condition_cardinality. If None,
                 then the global_condition tensor is regarded as a vector which
                 must have dimension global_condition_channels.
-            ctc_loss: True iff we should use connectionist temporal loss.
-                Otherwise we use cross entropy.
             gated_linear: True iff we use linear instead of hypertan in the
                 gating units.
             compute_the_params: True iff we compute params in a hypernet
@@ -86,6 +87,8 @@ class WaveNetModel(object):
             non_computed_params: List of tokens indicating which parameters
                 are not computed. Only has an effect if compute_the_params
                 is True.
+            frequency_domain_loss: True iff loss should be computed in
+                frequency domain.
 
         '''
         self.dilations = dilations
@@ -99,9 +102,8 @@ class WaveNetModel(object):
         self.global_condition_channels = global_condition_channels
         self.global_condition_cardinality = global_condition_cardinality
         self.local_condition_channels = local_condition_channels
-        self.ctc_loss = ctc_loss
         # Add one category for "blank"
-        self.softmax_channels = self.quantization_channels + 1
+        self.softmax_channels = self.quantization_channels
         self.gated_linear = gated_linear
         self.compute_the_params = compute_the_params
         self.non_computed_params = non_computed_params
@@ -111,11 +113,22 @@ class WaveNetModel(object):
         self.lc_shape = None
         self.disc_input_shape = None
         self.extended_shape = None
-        self.variables = self._create_vars()
+        if frequency_domain_loss:
+            # Lowest audible freuency
+            LOWEST_FREQUENCY_OF_LOSS = 40
+            LOW_FREQ_PERIOD = sample_rate // LOWEST_FREQUENCY_OF_LOSS
+            self.freqloss = FrequencyDomainLoss(
+                max_period=LOW_FREQ_PERIOD,
+                quantization_levels=quantization_channels)
+        else:
+            self.freqloss = None
 
-    def _make_spec(self, name, shape, kind):
+        self.variables = self._create_vars()
+        self.entropy_loss = None
+
+    def _make_spec(self, name, shape, kind, initial_value=None):
         def has_match(name, tokens):
-            match = True
+            match = False
             for token in tokens:
                 if token in name:
                     match = True
@@ -126,16 +139,18 @@ class WaveNetModel(object):
             # non_computed_params is list of tokens, such that if that token
             # appears in the parameter name, it is not computed.
             if has_match(name, self.non_computed_params):
-                return StoredParm(name=name, shape=shape, kind=kind)
+                return StoredParm(name=name, shape=shape, kind=kind,
+                                  initial_value=initial_value)
             else:
-                return ComputedParm(name=name, shape=shape, kind=kind)
+                return ComputedParm(name=name, shape=shape, kind=kind,
+                                    initial_value=initial_value)
         else:
-            return StoredParm(name=name, shape=shape, kind=kind)
+            return StoredParm(name=name, shape=shape, kind=kind,
+                              initial_value=initial_value)
 
     def _create_vars(self):
         self.param_specs = self.create_param_specs()
 
-        print("Paramspecs:{}".format(self.param_specs))
         # Strip the top element off; it's just the name of the
         # net.
         self.param_specs = self.param_specs  # self.param_specs.children[0]
@@ -252,6 +267,13 @@ class WaveNetModel(object):
                 shape=[self.skip_channels],
                 kind='bias'))
 
+        if self.freqloss is not None:
+            c.add_param(self._make_spec(
+                name='temperature',
+                shape=[],
+                kind='filter',
+                initial_value=2.0))
+
         return t
 
     def _add_recursively(self, name, newvars, vars):
@@ -312,8 +334,8 @@ class WaveNetModel(object):
         weights_filter = variables['filter']
         weights_gate = variables['gate']
 
-        if layer_index == 0:
-            conv_filt_inp = tf.concat(concat_dim=2,
+        if layer_index == 0 and local_condition_batch is not None:
+            conv_filt_inp = tf.concat(axis=2,
                                       values=[local_condition_batch,
                                               input_batch])
         else:
@@ -640,8 +662,17 @@ class WaveNetModel(object):
                                               local_condition)
             out = tf.reshape(raw_output, [-1, self.softmax_channels])
             # Cast to float64 to avoid bug in TensorFlow
-            proba = tf.cast(
-                tf.nn.softmax(tf.cast(out, tf.float64)), tf.float32)
+            if 'temperature' in self.variables[TOP_NAME]['postprocessing']:
+                temp = self.variables[TOP_NAME]['postprocessing'
+                            ]['temperature']
+            else:
+                temp = None
+            proba = output_to_probs(raw_output=out, temp=temp,
+                                    use_gumbel=False,
+                                    gumbel_noise=False)
+
+#            proba = tf.cast(
+#                tf.nn.softmax(tf.cast(out, tf.float64)), tf.float32)
             last = tf.slice(
                 proba,
                 [tf.shape(proba)[0] - 1, 0],
@@ -704,7 +735,10 @@ class WaveNetModel(object):
         postlude_shape = [source_shape[0], postlude_length, source_shape[2]]
         prelude = tf.fill(postlude_shape, self.quantization_channels)
         postlude = tf.fill(postlude_shape, self.quantization_channels)
-        return tf.concat(concat_dim=1, values=[prelude, source, postlude])
+        return tf.concat(axis=1, values=[prelude, source, postlude])
+
+    def temperature(self):
+        return self.variables[TOP_NAME]['postprocessing']['temperature']
 
     def loss(self,
              input_batch,
@@ -742,33 +776,38 @@ class WaveNetModel(object):
                                               local_condition_batch)
 
             with tf.name_scope('loss'):
-
-                if self.ctc_loss:
-                    self.raw_output_shape = tf.shape(raw_output)
-                    shifted = self._shift_one_sample(discretized_input)
-                    sparse_labels = self._to_sparse(tf.reshape(shifted, [1, -1]))
-
-                    loss = tf.nn.ctc_loss(
-                        inputs=raw_output,
-                        labels=sparse_labels,
-                        # labels=tf.reshape(shifted, [-1, 1]),
-                        sequence_length=tf.fill([tf.shape(raw_output)[0]],
-                                                 tf.shape(raw_output)[1]),
-                        preprocess_collapse_repeated=False,
-                        ctc_merge_repeated=False,
-                        time_major=False)
-
-                else:
-                    prediction = tf.reshape(raw_output,
+                prediction = tf.reshape(raw_output,
                                             [-1, self.softmax_channels])
+                if self.freqloss is not None:
+                    # Compute loss using FrequencyDomainLoss
+                    # input_batch = tf.reshape(input_batch, [1,-1,1])
+                    undiscretized_input = mu_law_decode(discretized_input,
+                                          self.quantization_channels)
+                    undiscretized_input = tf.reshape(undiscretized_input,
+                                                     [1,-1,1])
+                    shifted = self._shift_one_sample(undiscretized_input)
+                    temp = self.variables[TOP_NAME]['postprocessing'
+                                ]['temperature']
+                    probs = output_to_probs(raw_output=prediction,
+                                            use_gumbel = False,
+                                            temp=temp)
+                    waveform = self.freqloss.probs_to_waveform(probs=probs)
+                    waveform = tf.reshape(waveform, [1, -1, 1])
+                    reconstruction_loss = \
+                        self.freqloss(target=shifted, actual=waveform)
+                    self.entropy_loss = 0.0*probs_to_entropy_bits(probs)
+                    loss = reconstruction_loss
+                    reduced_loss = tf.reduce_mean(loss) + self.entropy_loss
+                else:
+                    # Use the usual cross-entropy loss.
                     one_hotted_input = self._one_hot(extended_discretized_input)
                     shifted = self._shift_one_sample(one_hotted_input)
                     loss = tf.nn.softmax_cross_entropy_with_logits(
-                        prediction,
-                        tf.reshape(shifted, [-1, self.softmax_channels]))
-                reduced_loss = tf.reduce_mean(loss)
+                        logits=prediction,
+                        labels=tf.reshape(shifted, [-1, self.softmax_channels]))
+                    reduced_loss = tf.reduce_mean(loss)
 
-                tf.scalar_summary(loss_prefix+'loss', reduced_loss)
+                tf.summary.scalar(loss_prefix+'loss', reduced_loss)
 
                 if l2_regularization_strength is None:
                     return reduced_loss
@@ -782,7 +821,7 @@ class WaveNetModel(object):
                     total_loss = (reduced_loss +
                                   l2_regularization_strength * l2_loss)
 
-                    tf.scalar_summary(loss_prefix+'l2_loss', l2_loss)
-                    tf.scalar_summary(loss_prefix+'total_loss', total_loss)
+                    tf.summary.scalar(loss_prefix+'l2_loss', l2_loss)
+                    tf.summary.scalar(loss_prefix+'total_loss', total_loss)
 
                     return total_loss

@@ -27,15 +27,14 @@ F2 = 196.00  # G frequency in hz
 F3 = 233.08  # B-flat frequency in hz
 # This is set to the upsample rate of the conv net, and thus should be
 # the upper bound on how many audio samples correspond to a single
-# character. The CTC loss can create blanks in order allow the text
-# to catch up to the audio.
+# character.
 UPSAMPLE_RATE = 200
 MEDIAN_SAMPLES_PER_CHAR = 200
 LAYER_COUNT = 6
 TEXT_ENCODER_CHANNELS = 16
-TEXT_ENCODER_CHANNELS_NON_DILATED = 256
-TEXT_ENCODER_OUTPUT_CHANNELS = 16 # 128 # 512
-LOCAL_CONDITION_CHANNELS = 16
+TEXT_ENCODER_CHANNELS_NON_DILATED = 128
+TEXT_ENCODER_OUTPUT_CHANNELS = 128
+LOCAL_CONDITION_CHANNELS = 128
 LARGEST_DURATION_RATIO = 1.2
 SMALLEST_DURATION_RATIO=0.8
 
@@ -111,32 +110,31 @@ class TestLCNet(tf.test.TestCase):
         self.momentum = 0.9
         self.global_conditioning = False
         self.train_iters = 100
-        self.net = WaveNetModel(
-            dilations=[1, 2, 4, 8, 16, 32, 64, 128, 256,
-                       1, 2, 4, 8, 16, 32, 64, 128, 256,
-                       1, 2, 4, 8, 16, 32, 64, 128, 256],
-            filter_width=2,
-            residual_channels=16,
-            dilation_channels=16,
-            quantization_channels=QUANTIZATION_CHANNELS,
-            use_biases=True,
-            skip_channels=256,
-            local_condition_channels=LOCAL_CONDITION_CHANNELS,
-            ctc_loss=False,
-            gated_linear=False)
+#        self.net = WaveNetModel(
+#            dilations=[1, 2, 4, 8, 16, 32, 64, 128, 256,
+#                       1, 2, 4, 8, 16, 32, 64, 128, 256,
+#                       1, 2, 4, 8, 16, 32, 64, 128, 256],
+#            filter_width=2,
+#            residual_channels=16,
+#            dilation_channels=16,
+#            quantization_channels=QUANTIZATION_CHANNELS,
+#            use_biases=True,
+#            skip_channels=256,
+#            local_condition_channels=LOCAL_CONDITION_CHANNELS,
+#            gated_linear=False)
 
-        # Create text encoder network.
-        self.text_encoder = ConvNetModel(
-            encoder_channels=TEXT_ENCODER_CHANNELS,
-            histograms=False,
-            output_channels=TEXT_ENCODER_OUTPUT_CHANNELS,
-            local_condition_channels=LOCAL_CONDITION_CHANNELS,
-            layer_count=None,
-            dilations=[1, 2, 4, 8, 16, 32, 64, 128, 256,
-                       1, 2, 4, 8, 16, 32, 64, 128, 256,
-                       1, 2, 4, 8, 16, 32, 64, 128, 256],
-            gated_linear=False,
-            density_conditioned=True)
+#        # Create text encoder network.
+#        self.text_encoder = ConvNetModel(
+#            encoder_channels=TEXT_ENCODER_CHANNELS,
+#            histograms=False,
+#            output_channels=TEXT_ENCODER_OUTPUT_CHANNELS,
+#            local_condition_channels=LOCAL_CONDITION_CHANNELS,
+#            layer_count=None,
+#            dilations=[1, 2, 4, 8, 16, 32, 64, 128, 256,
+#                       1, 2, 4, 8, 16, 32, 64, 128, 256,
+#                       1, 2, 4, 8, 16, 32, 64, 128, 256],
+#            gated_linear=False,
+#            density_conditioned=True)
 
         self.audio_placeholder = tf.placeholder(dtype=tf.float32)
         self.gc_placeholder = tf.placeholder(dtype=tf.int32)  \
@@ -197,7 +195,10 @@ class TestLCNet(tf.test.TestCase):
 
             # Run the WaveNet to predict the next sample.
             feed_dict = {self.samples_placeholder: window,
-                         self.lc_placeholder: lc_window}
+                         self.lc_placeholder: lc_window,
+                         self.sample_density: float(UPSAMPLE_RATE),
+                         self.audio_length: samples_to_generate}
+
             if gc is not None:
                 feed_dict[gc_placeholder] = gc
             results = sess.run([next_sample_probs], feed_dict=feed_dict)
@@ -609,16 +610,14 @@ class TestHyperTraining(TestLCNet):
         print('TestHyperNetWithLocalConditioning setup.')
         sys.stdout.flush()
 
-#        self.optimizer_type = 'adam'
-#        self.learning_rate = 0.0004
-        self.optimizer_type = 'sgd'
-        self.learning_rate = 0.01
+        self.optimizer_type = 'adam'
+        self.learning_rate = 0.0001
 #        self.optimizer_type = 'rmsprop'
 #        self.learning_rate = 0.001
         self.generate = True
         self.momentum = 0.9
         self.global_conditioning = False
-        self.train_iters = 50000
+        self.train_iters = 40000
         self.net = WaveNetModel(
             dilations=[1, 2, 4, 8, 16, 32, 64, 128, 256,
                        1, 2, 4, 8, 16, 32, 64, 128, 256,
@@ -630,7 +629,6 @@ class TestHyperTraining(TestLCNet):
             use_biases=True,
             skip_channels=256,
             local_condition_channels=LOCAL_CONDITION_CHANNELS,
-            ctc_loss=False,
             gated_linear=False,
             compute_the_params=True,
             # This set of non-computed params leaves only the time conv
@@ -667,7 +665,7 @@ class TestHyperTraining(TestLCNet):
         self.parameter_producer = ParamProducerModel(
             input_spec=input_spec,
             output_specs=self.net.param_specs,
-            residual_channels=1024)
+            residual_channels=512)
 
         self.audio_placeholder = tf.placeholder(dtype=tf.float32, name='audio_placeholder')
         self.gc_placeholder = tf.placeholder(dtype=tf.int32, name='gc_placeholder')  \
