@@ -105,6 +105,7 @@ class ParamProducerModel:
             table = create_embedding_table(
                             name=self.input_spec.name+"_embedding_table",
                             shape=table_shape)
+
             vect = quantize_interp_embedding(
                                     value=input_value,
                                     quant_levels=quant_levels,
@@ -151,9 +152,9 @@ class ParamProducerModel:
             print("====================================================")
             param_factory = ParamFactory(middle_representation)
 
-            # Create the recursive dict-of-dicts of tensors that the
+            # Create the recursive dict-of-dicts of tensors for the
             # receiving network (the net whose parameters this net is
-            # computing.
+            # computing).
             outputs = create_vars(spec_tree=self.output_specs,
                                   computed_not_stored=True,
                                   parm_factory=param_factory)

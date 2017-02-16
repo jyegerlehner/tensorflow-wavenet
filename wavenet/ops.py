@@ -39,37 +39,32 @@ def create_bias_variable(name, shape, value=0.0):
 
 def create_adam_optimizer(learning_rate, momentum):
     return tf.train.AdamOptimizer(learning_rate=learning_rate,
-                                  epsilon=1e-4)
+                                  epsilon=1e-3)
 
 
 def create_sgd_optimizer(learning_rate, momentum):
     return tf.train.MomentumOptimizer(learning_rate=learning_rate,
                                       momentum=momentum)
 
-
 def create_rmsprop_optimizer(learning_rate, momentum):
     return tf.train.RMSPropOptimizer(learning_rate=learning_rate,
                                      momentum=momentum,
                                      epsilon=1e-3)
 
-
 optimizer_factory = {'adam': create_adam_optimizer,
                      'sgd': create_sgd_optimizer,
                      'rmsprop': create_rmsprop_optimizer}
-
 
 def clamp(val, min, max):
     val = tf.maximum(val, min)
     val = tf.minimum(val, max)
     return val
 
-
 def shape_size(shape):
     size=1
     for dim_size in shape.as_list():
         size *= dim_size
     return size
-
 
 def gated_residual_layer(input, layer_name):
     with tf.variable_scope(layer_name):
@@ -86,17 +81,15 @@ def gated_residual_layer(input, layer_name):
         output = input + t1*t2
         return output
 
-
 def quantize_interp_embedding(value, quant_levels, min, max, embedding_table):
     (lower_bound, upper_bound, interp_ratio) = quantize_value(
             value=value,
             quant_levels=quant_levels,
-            min=0.0,
-            max=6.0)
+            min=min,
+            max=max)
     interpolated_embedding = interpolate_embeddings(
               lower_bound, upper_bound, interp_ratio, embedding_table)
     return interpolated_embedding
-
 
 def quantize_value(value, quant_levels, min, max):
     assert max > min

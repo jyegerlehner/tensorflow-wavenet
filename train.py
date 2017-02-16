@@ -17,7 +17,10 @@ import time
 import tensorflow as tf
 from tensorflow.python.client import timeline
 
-from wavenet import WaveNetModel, AudioReader, optimizer_factory, ConvNetModel
+from wavenet import (WaveNetModel, AudioReader, optimizer_factory,
+                     ConvNetModel, compute_sample_density, InputSpec,
+                     ParamProducerModel)
+
 
 DATA_DIRECTORY = './VCTK-Corpus'
 LOGDIR_ROOT = './logdir'
@@ -210,6 +213,33 @@ def compute_test_loss(sess, test_steps, test_loss):
     accumulator /= test_steps
     return accumulator
 
+
+def CreateLoss(audio_batch, text_batch, gc_id_batch,
+               l2_regularization_strength, loss_prefix):
+    # Compute the sample density
+    (sample_density, audio_length) = compute_sample_density(
+          audio=audio_batch,
+          text=text_batch)
+
+    # Compute the parameter tensors.
+    encoder_params = parameter_producer.create_params(
+        input_value=sample_density)
+
+    # Hand the computed parameter tensors to the wavenet.
+    net.merge_params(encoder_params)
+
+    # Compute local conditions from text.
+    lc_batch = text_encoder.upsample(text_batch, audio_length, sample_density)
+
+    loss = net.loss(input_batch=audio_batch,
+                    global_condition_batch=gc_id_batch,
+                    local_condition_batch=lc_batch,
+                    l2_regularization_strength=l2_regularization_strength,
+                    loss_prefix=loss_prefix)
+
+    return (sample_density, lc_batch, loss)
+
+
 def main():
     args = get_arguments()
     try:
@@ -262,19 +292,21 @@ def main():
          test_text_batch, test_gc_id_batch) = \
             get_input_batch(gc_enabled, test_interval, reader)
 
+    encoder_dilations = encoder_params['dilations']
+    if len(encoder_dilations) == 0:
+        encoder_dilations = None
     # Create text encoder network.
     text_encoder = ConvNetModel(
         encoder_channels=encoder_params["encoder_channels"],
         histograms=args.histograms,
         output_channels=encoder_params['encoder_output_channels'],
         local_condition_channels=encoder_params['local_condition_channels'],
-        dilations=encoder_params['dilations'],
+        layer_count=encoder_params["layer_count"],
+        dilations=encoder_dilations,
+        elu_not_relu=encoder_params["elu_not_relu"],
         gated_linear=False,
-        density_conditioned=True)
-#        density_conditioned=False,
-#        compute_the_params=True,
-#        non_computed_params=None,
-#        variables=None)
+        density_conditioned=False,
+        compute_the_params=False)
 
 
     # Create network.
@@ -286,34 +318,38 @@ def main():
         skip_channels=wavenet_params["skip_channels"],
         quantization_channels=wavenet_params["quantization_channels"],
         use_biases=wavenet_params["use_biases"],
+        elu_not_relu=wavenet_params["elu_not_relu"],
         histograms=args.histograms,
         global_condition_channels=args.gc_channels,
         global_condition_cardinality=reader.gc_category_cardinality,
         local_condition_channels=encoder_params["local_condition_channels"],
-        ctc_loss=False,
         gated_linear=False)
+
+    input_spec = InputSpec(
+        kind='quantized_scalar',
+        name='sample_density',
+        opts={'quant_levels':41, 'range_min':SMALLEST_DURATION_RATIO,
+                'range_max': LARGEST_DURATION_RATIO})
+
+    parameter_producer = ParamProducerModel(
+        input_spec=input_spec,
+        output_specs=self.net.param_specs,
+        residual_channels=128)
 
     if args.l2_regularization_strength == 0:
         args.l2_regularization_strength = None
 
     text_batch = tf.squeeze(text_batch)
-    lc_batch = text_encoder.upsample(text_batch, tf.shape(audio_batch)[0])
-    if test_text_batch is not None:
-        test_text_batch = tf.squeeze(test_text_batch)
-        test_lc_batch = text_encoder.upsample(test_text_batch,
-                                          tf.shape(test_audio_batch)[0])
-    loss = net.loss(input_batch=audio_batch,
-                    global_condition_batch=gc_id_batch,
-                    local_condition_batch=lc_batch,
-                    l2_regularization_strength=args.l2_regularization_strength)
+
+    # Create the loss.
+    (sample_density, lc, loss) = CreateLoss( audio_batch, text_batch,
+        gc_id_batch, args.l2_regularization_strength, 'train_')
 
     if test_text_batch is not None:
-        test_loss = net.loss(input_batch=test_audio_batch,
-                         global_condition_batch=test_gc_id_batch,
-                         local_condition_batch=test_lc_batch,
-                         l2_regularization_strength=
-                            args.l2_regularization_strength,
-                         loss_prefix='test_')
+        test_text_batch = tf.squeeze(test_text_batch)
+        (test_sample_density, test_lc, test_loss) = CreateLoss(
+            test_audio_batch, test_text_batch, test_gc_id_batch,
+            args.l2_regularization_strength, 'test_')
 
     optimizer = optimizer_factory[args.optimizer](
                     learning_rate=args.learning_rate,
@@ -375,8 +411,8 @@ def main():
                     with open(timeline_path, 'w') as f:
                         f.write(tl.generate_chrome_trace_format(show_memory=True))
                 else:
-                    summary, loss_value, _, sample_density = sess.run([summaries,
-                        loss, optim, text_encoder.sample_density])
+                    summary, loss_value, _, sample_density = sess.run(
+                        [summaries, loss, optim, sample_density])
                     writer.add_summary(summary, step)
 
                 # Print an asterisk only if we've recomputed test loss.

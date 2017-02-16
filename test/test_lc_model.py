@@ -109,32 +109,34 @@ class TestLCNet(tf.test.TestCase):
         self.generate = False
         self.momentum = 0.9
         self.global_conditioning = False
-        self.train_iters = 100
-#        self.net = WaveNetModel(
-#            dilations=[1, 2, 4, 8, 16, 32, 64, 128, 256,
-#                       1, 2, 4, 8, 16, 32, 64, 128, 256,
-#                       1, 2, 4, 8, 16, 32, 64, 128, 256],
-#            filter_width=2,
-#            residual_channels=16,
-#            dilation_channels=16,
-#            quantization_channels=QUANTIZATION_CHANNELS,
-#            use_biases=True,
-#            skip_channels=256,
-#            local_condition_channels=LOCAL_CONDITION_CHANNELS,
-#            gated_linear=False)
+        self.train_iters = 10
+        self.net = WaveNetModel(
+            dilations=[1, 2, 4, 8, 16, 32, 64, 128, 256,
+                       1, 2, 4, 8, 16, 32, 64, 128, 256,
+                       1, 2, 4, 8, 16, 32, 64, 128, 256],
+            filter_width=2,
+            residual_channels=16,
+            dilation_channels=16,
+            elu_not_relu=True,
+            quantization_channels=QUANTIZATION_CHANNELS,
+            use_biases=True,
+            skip_channels=256,
+            local_condition_channels=LOCAL_CONDITION_CHANNELS,
+            gated_linear=False)
 
-#        # Create text encoder network.
-#        self.text_encoder = ConvNetModel(
-#            encoder_channels=TEXT_ENCODER_CHANNELS,
-#            histograms=False,
-#            output_channels=TEXT_ENCODER_OUTPUT_CHANNELS,
-#            local_condition_channels=LOCAL_CONDITION_CHANNELS,
-#            layer_count=None,
-#            dilations=[1, 2, 4, 8, 16, 32, 64, 128, 256,
-#                       1, 2, 4, 8, 16, 32, 64, 128, 256,
-#                       1, 2, 4, 8, 16, 32, 64, 128, 256],
-#            gated_linear=False,
-#            density_conditioned=True)
+        # Create text encoder network.
+        self.text_encoder = ConvNetModel(
+            encoder_channels=TEXT_ENCODER_CHANNELS,
+            histograms=False,
+            output_channels=TEXT_ENCODER_OUTPUT_CHANNELS,
+            elu_not_relu=True,
+            local_condition_channels=LOCAL_CONDITION_CHANNELS,
+            layer_count=None,
+            dilations=[1, 2, 4, 8, 16, 32, 64, 128, 256,
+                       1, 2, 4, 8, 16, 32, 64, 128, 256,
+                       1, 2, 4, 8, 16, 32, 64, 128, 256],
+            gated_linear=False,
+            density_conditioned=True)
 
         self.audio_placeholder = tf.placeholder(dtype=tf.float32)
         self.gc_placeholder = tf.placeholder(dtype=tf.int32)  \
@@ -611,13 +613,15 @@ class TestHyperTraining(TestLCNet):
         sys.stdout.flush()
 
         self.optimizer_type = 'adam'
-        self.learning_rate = 0.0001
+        self.learning_rate = 0.0004
 #        self.optimizer_type = 'rmsprop'
+#        self.learning_rate = 0.0002
+#        self.optimizer_type = 'sgd'
 #        self.learning_rate = 0.001
         self.generate = True
         self.momentum = 0.9
         self.global_conditioning = False
-        self.train_iters = 40000
+        self.train_iters = 100000
         self.net = WaveNetModel(
             dilations=[1, 2, 4, 8, 16, 32, 64, 128, 256,
                        1, 2, 4, 8, 16, 32, 64, 128, 256,
@@ -626,8 +630,9 @@ class TestHyperTraining(TestLCNet):
             residual_channels=32,
             dilation_channels=32,
             quantization_channels=QUANTIZATION_CHANNELS,
-            use_biases=True,
+            use_biases=False,
             skip_channels=256,
+            elu_not_relu=True,
             local_condition_channels=LOCAL_CONDITION_CHANNELS,
             gated_linear=False,
             compute_the_params=True,
@@ -651,7 +656,10 @@ class TestHyperTraining(TestLCNet):
             output_channels=TEXT_ENCODER_OUTPUT_CHANNELS,
             local_condition_channels=LOCAL_CONDITION_CHANNELS,
             layer_count=3,
+            elu_not_relu=True,
             dilations=None,
+#            dilations=[1,2,
+#                       1,2],
             gated_linear=False,
             density_conditioned=False,
             compute_the_params=False)
@@ -659,13 +667,13 @@ class TestHyperTraining(TestLCNet):
         input_spec = InputSpec(
             kind='quantized_scalar',
             name='sample_density',
-            opts={'quant_levels':21, 'range_min':SMALLEST_DURATION_RATIO,
+            opts={'quant_levels':2, 'range_min':SMALLEST_DURATION_RATIO,
                     'range_max': LARGEST_DURATION_RATIO})
 
         self.parameter_producer = ParamProducerModel(
             input_spec=input_spec,
             output_specs=self.net.param_specs,
-            residual_channels=512)
+            residual_channels=128)
 
         self.audio_placeholder = tf.placeholder(dtype=tf.float32, name='audio_placeholder')
         self.gc_placeholder = tf.placeholder(dtype=tf.int32, name='gc_placeholder')  \
@@ -698,7 +706,7 @@ class TestHyperTraining(TestLCNet):
         #show_params(self.text_encoder.variables)
 
         local_conditions = self.text_encoder.upsample(
-            self.ascii_placeholder, audio_length, sample_density)
+            self.ascii_placeholder, audio_length)
 
         loss = self.net.loss(input_batch=self.audio_placeholder,
                              global_condition_batch=self.gc_placeholder,
