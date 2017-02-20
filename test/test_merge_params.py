@@ -13,7 +13,7 @@ from wavenet import (WaveNetModel, time_to_batch, batch_to_time, causal_conv,
                      optimizer_factory, mu_law_decode, ConvNetModel,
                      InputSpec, ParamProducerModel, show_param_tree,
                      show_params, quantize_value, create_embedding_table,
-                     quantize_interp_embedding)
+                     quantize_interp_embedding, create_repeated_embedding)
 
 LAYER_COUNT = 6
 TEXT_ENCODER_CHANNELS = 8
@@ -34,7 +34,7 @@ class TestParamMerge(tf.test.TestCase):
                        1, 2, 4, 8, 16, 32, 64, 128, 256,
                        1, 2, 4, 8, 16, 32, 64, 128, 256],
             gated_linear=False,
-            density_conditioned=False,
+            density_options=None,
             compute_the_params=True,
             non_computed_params=['text_embedding'])
 
@@ -90,24 +90,51 @@ class TestParamMerge(tf.test.TestCase):
                             verify_shape=True)
 
         # np_vals = np.array([0.1*i for i in range(60)], dtype=np.float32)
-        np_vals = np.array([0.0, 1.0, 2.0], dtype=np.float32)
+        np_vals = np.array([0.0, 15.0, 20.0, 50.0, 60.0, 200.0], dtype=np.float32)
 
         interpolated_embedding = quantize_interp_embedding(
                                     value=tf.constant(np_vals),
                                     quant_levels=QUANT_LEVELS,
                                     min=0.0,
-                                    max=6.0,
+                                    max=60.0,
                                     embedding_table=table)
 
         with self.test_session() as sess:
             embedding = sess.run(interpolated_embedding)
 
-        expected_embedding = np.array([[1.0, 0.0, 0.0, 0.0],
-                                       [0.5, 0.5, 0.0, 0.0],
-                                       [0.0, 1.0, 0.0, 0.0]])
+        expected_embedding = np.array([[1.00, 0.00, 0.0, 0.0],
+                                       [0.25, 0.75, 0.0, 0.0],
+                                       [0.00, 1.00, 0.0, 0.0],
+                                       [0.00, 0.00, 0.5, 0.5],
+                                       [0.00, 0.00, 0.0, 1.0],
+                                       [0.00, 0.00, 0.0, 1.0]])
+#        print("embedding:{}".format(embedding))
+#        print("expected embedding:{}".format(expected_embedding))
+#        print("lbv:{} ubv:{} ratio:{} lower ratio:{}".format(lbv, ubv, rv, lrv))
 
         np.testing.assert_allclose(embedding, expected_embedding, rtol=0.001)
 
+
+    def testUniformInit(self):
+        embedding_size = 5
+        table_entries = 3
+        initializer_shape = [1,embedding_size]
+        table_shape = [table_entries, embedding_size]
+        table = create_repeated_embedding(name="atable",
+                                       shape=table_shape)
+        with self.test_session() as sess:
+            sess.run(tf.global_variables_initializer())
+            table_val = sess.run(table)
+
+        first_embedding_val = table_val[0, :]
+        ctr = 0
+        for entry in range(table_val.shape[0]):
+            # Each embedding should merely repeat the first embedding
+            np.testing.assert_allclose(table_val[entry,:],
+                                       first_embedding_val, rtol=0.001)
+            ctr = ctr + 1
+
+        assert ctr > 1
 
 
 

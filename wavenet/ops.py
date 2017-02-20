@@ -26,10 +26,25 @@ def create_embedding_table(name, shape):
         initial_val = np.identity(n=shape[0], dtype=np.float32)
         return tf.Variable(initial_val, name=name)
     else:
-        initializer = tf.truncated_normal(shape, mean=0.0, stddev=0.3,
-                                dtype=tf.float32)
+        initializer = tf.truncated_normal(shape=shape,
+            mean=0.0, stddev=0.3, dtype=tf.float32)
         variable = tf.Variable(initializer, name=name)
         return variable
+
+''' Create an embedding table, where the initial value of each embedding vector
+    is identical.
+'''
+def create_repeated_embedding(name, shape):
+    assert len(shape) == 2
+    # second dimension is the embedding size.
+    embedding_size = shape[1]
+    entry_count = shape[0]
+    initial_embedding = np.random.normal(scale=0.3, size=(embedding_size))
+    initial_value = np.zeros(shape=shape, dtype=np.float32)
+    for entry in range(entry_count):
+        initial_value[entry, :] = initial_embedding
+    variable = tf.Variable(initial_value, name=name)
+    return variable
 
 def create_bias_variable(name, shape, value=0.0):
     '''Create a bias variable with the specified name and shape and initialize
@@ -91,8 +106,8 @@ def quantize_interp_embedding(value, quant_levels, min, max, embedding_table):
     (lower_bound, upper_bound, interp_ratio) = quantize_value(
             value=value,
             quant_levels=quant_levels,
-            min=0.0,
-            max=6.0)
+            min=min,
+            max=max)
     interpolated_embedding = interpolate_embeddings(
               lower_bound, upper_bound, interp_ratio, embedding_table)
     return interpolated_embedding
@@ -101,15 +116,16 @@ def quantize_interp_embedding(value, quant_levels, min, max, embedding_table):
 def quantize_value(value, quant_levels, min, max):
     assert max > min
     assert quant_levels > 1
-    EPSILON = 1e-7
     value = clamp(value, min, max)
-    # Add EPSILON so ratio never gets to exactly 1.0
-    ratio = (value - min) / (EPSILON + max - min)
+    # Prevent ratio from getting to exactly 1.0
+    ratio = (value - min) / (max - min)
+    MAX_RATIO = 0.999999
+    ratio = clamp(ratio, 0.0, MAX_RATIO)
     lower_bound = tf.cast(tf.floor(ratio*quant_levels), dtype=tf.int32)
     upper_bound = lower_bound + 1
     # Width of each quantization levels
     delta = tf.cast((max - min) / quant_levels, dtype=tf.float32)
-    interp_ratio = tf.cast((value - tf.cast(lower_bound, dtype=tf.float32)*delta) / delta, dtype=tf.float32)
+    interp_ratio = tf.cast((value - (tf.cast(lower_bound, dtype=tf.float32)*delta)) / delta, dtype=tf.float32)
     return (lower_bound, upper_bound, interp_ratio)
 
 

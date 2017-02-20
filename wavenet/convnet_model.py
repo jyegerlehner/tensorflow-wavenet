@@ -23,7 +23,7 @@ class ConvNetModel(object):
                  layer_count=None,
                  dilations=None,
                  gated_linear=False,
-                 density_conditioned=False,
+                 density_options = None,
                  compute_the_params=False,
                  non_computed_params=None):
         self.encoder_channels = encoder_channels
@@ -47,7 +47,12 @@ class ConvNetModel(object):
         self.text_shape = None
         self.gated_linear = gated_linear
         # True if this net is conditioning on density.
-        self.density_conditioned = density_conditioned
+        if density_options is None:
+            self.density_conditioned = False
+        else:
+            self.density_conditioned = density_options['density_conditioned']
+            self.min_sample_density = density_options['min_sample_density']
+            self.max_sample_density = density_options['max_sample_density']
         self.compute_the_params = compute_the_params
         self.non_computed_params = non_computed_params
         self.param_specs=None
@@ -255,7 +260,7 @@ class ConvNetModel(object):
                                       filters=density_gate_weights,
                                       stride=1,
                                       padding="SAME",
-                                      name='sd_gates') + \
+                                      name='sd_gate') + \
                            density_gate_bias
         else:
             assert(density_embedding is None)
@@ -315,8 +320,8 @@ class ConvNetModel(object):
         density_embedding = quantize_interp_embedding(
             value=sample_density,
             quant_levels=DENSITY_QUANT_LEVELS,
-            min=MIN_SAMPLE_DENSITY,
-            max=MAX_SAMPLE_DENSITY,
+            min=self.min_sample_density,
+            max=self.max_sample_density,
             embedding_table=table)
         shape = [1, 1, self.encoder_channels]
         density_embedding = tf.reshape(density_embedding, shape)
@@ -380,22 +385,14 @@ class ConvNetModel(object):
                                           audio_length)]):
                 # Reshape so we can use image resize on it: height = 1
                 embedding = tf.expand_dims(embedding, axis=1)
-#            upsampled = tf.image.resize_bilinear(embedding,
-#                                                 [1, number_samples])
-                upsampled = tf.image.resize_bilinear(embedding,
+#                upsampled = tf.image.resize_bilinear(embedding,
+#                                                    [1, number_samples])
+                upsampled = tf.image.resize_nearest_neighbor(embedding,
                                                     [1, number_samples])
                 # Remove the dummy "height=1" dimension we added for the resize
                 # to bring it back to batch x duration x channels.
                 upsampled = tf.squeeze(upsampled, axis=1)
 
-#            # Desired number of samples
-#            audio_padding = self._receptive_field() // 2
-#            desired_samples = audio_length + 2 * audio_padding
-#            cut_size = (number_samples - desired_samples) // 2
-
-#            upsampled = tf.slice(upsampled,
-#                                 [0, cut_size, 0],
-#                                 [-1, desired_samples, -1])
             return upsampled
 
 

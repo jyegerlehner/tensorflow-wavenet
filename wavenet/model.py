@@ -115,7 +115,7 @@ class WaveNetModel(object):
         self.extended_shape = None
         if frequency_domain_loss:
             # Lowest audible freuency
-            LOWEST_FREQUENCY_OF_LOSS = 40
+            LOWEST_FREQUENCY_OF_LOSS = 20
             LOW_FREQ_PERIOD = sample_rate // LOWEST_FREQUENCY_OF_LOSS
             self.freqloss = FrequencyDomainLoss(
                 max_period=LOW_FREQ_PERIOD,
@@ -125,6 +125,8 @@ class WaveNetModel(object):
 
         self.variables = self._create_vars()
         self.entropy_loss = None
+        # Set this to false if you want only frequency domain loss.
+        self.cross_entropy_loss = True
 
     def _make_spec(self, name, shape, kind, initial_value=None):
         def has_match(name, tokens):
@@ -267,12 +269,12 @@ class WaveNetModel(object):
                 shape=[self.skip_channels],
                 kind='bias'))
 
-        if self.freqloss is not None:
-            c.add_param(self._make_spec(
-                name='temperature',
-                shape=[],
-                kind='filter',
-                initial_value=2.0))
+#        if self.freqloss is not None:
+#            c.add_param(self._make_spec(
+#                name='temperature',
+#                shape=[],
+#                kind='filter',
+#                initial_value=2.0))
 
         return t
 
@@ -778,6 +780,7 @@ class WaveNetModel(object):
             with tf.name_scope('loss'):
                 prediction = tf.reshape(raw_output,
                                             [-1, self.softmax_channels])
+                reduced_loss = 0.0
                 if self.freqloss is not None:
                     # Compute loss using FrequencyDomainLoss
                     # input_batch = tf.reshape(input_batch, [1,-1,1])
@@ -786,8 +789,7 @@ class WaveNetModel(object):
                     undiscretized_input = tf.reshape(undiscretized_input,
                                                      [1,-1,1])
                     shifted = self._shift_one_sample(undiscretized_input)
-                    temp = self.variables[TOP_NAME]['postprocessing'
-                                ]['temperature']
+                    temp = None
                     probs = output_to_probs(raw_output=prediction,
                                             use_gumbel = False,
                                             temp=temp)
@@ -795,17 +797,18 @@ class WaveNetModel(object):
                     waveform = tf.reshape(waveform, [1, -1, 1])
                     reconstruction_loss = \
                         self.freqloss(target=shifted, actual=waveform)
-                    self.entropy_loss = 0.0*probs_to_entropy_bits(probs)
+                    # self.entropy_loss = 0.0*probs_to_entropy_bits(probs)
                     loss = reconstruction_loss
-                    reduced_loss = tf.reduce_mean(loss) + self.entropy_loss
-                else:
+                    reduced_loss = 0.1 *tf.reduce_mean(loss)  # + self.entropy_loss
+
+                if self.cross_entropy_loss:
                     # Use the usual cross-entropy loss.
                     one_hotted_input = self._one_hot(extended_discretized_input)
                     shifted = self._shift_one_sample(one_hotted_input)
                     loss = tf.nn.softmax_cross_entropy_with_logits(
                         logits=prediction,
                         labels=tf.reshape(shifted, [-1, self.softmax_channels]))
-                    reduced_loss = tf.reduce_mean(loss)
+                    reduced_loss += tf.reduce_mean(loss)
 
                 tf.summary.scalar(loss_prefix+'loss', reduced_loss)
 

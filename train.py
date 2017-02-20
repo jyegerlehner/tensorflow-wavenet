@@ -210,6 +210,25 @@ def compute_test_loss(sess, test_steps, test_loss):
     accumulator /= test_steps
     return accumulator
 
+def create_loss(audio_batch, text_batch, loss_prefix,
+                net, text_encoder, param_producer)
+    (sample_density, audio_length) = compute_sample_density(
+        audio=audio_batch,
+        text=text_batch)
+
+    encoder_params = param_producer.create_params(
+        input_value=sample_density)
+    net.merge_params(encoder_params)
+    local_conditions=text_encoder.upsample(text_batch, audio_length, sample_density)
+    loss = net.loss(input_batch=audio_batch,
+                    global_condition_batch=gc_id_batch,
+                    local_condition_batch=local_conditions,
+                    loss_prefix=loss_prefix,
+                    l2_regularization_strength=0.0)
+
+
+
+
 def main():
     args = get_arguments()
     try:
@@ -270,12 +289,13 @@ def main():
         local_condition_channels=encoder_params['local_condition_channels'],
         dilations=encoder_params['dilations'],
         gated_linear=False,
-        density_conditioned=True)
+        density_options=None,
+        compute_the_params=False,
+        non_computed_params=None)
 #        density_conditioned=False,
 #        compute_the_params=True,
 #        non_computed_params=None,
 #        variables=None)
-
 
     # Create network.
     net = WaveNetModel(
@@ -293,27 +313,57 @@ def main():
         ctc_loss=False,
         gated_linear=False)
 
+    input_spec = InputSpec(
+        kind='quantized_scalar',
+        name='sample_density',
+        opts={'quant_levels':41,
+              'range_min': encoder_params["sample_density_min"], # float(SMALLEST_DURATION_RATIO * MEDIAN_SAMPLES_PER_CHAR),
+              'range_max': encoder_params["sample_density_max"]} # float(LARGEST_DURATION_RATIO * MEDIAN_SAMPLES_PER_CHAR)})
+
+    param_producer = ParamProducerModel(
+        input_spec=input_spec,
+        output_specs=net.param_specs,
+        residula_channels=16)
+
     if args.l2_regularization_strength == 0:
         args.l2_regularization_strength = None
 
     text_batch = tf.squeeze(text_batch)
+
     lc_batch = text_encoder.upsample(text_batch, tf.shape(audio_batch)[0])
     if test_text_batch is not None:
         test_text_batch = tf.squeeze(test_text_batch)
         test_lc_batch = text_encoder.upsample(test_text_batch,
                                           tf.shape(test_audio_batch)[0])
-    loss = net.loss(input_batch=audio_batch,
-                    global_condition_batch=gc_id_batch,
-                    local_condition_batch=lc_batch,
-                    l2_regularization_strength=args.l2_regularization_strength)
+#    loss = net.loss(input_batch=audio_batch,
+#                    global_condition_batch=gc_id_batch,
+#                    local_condition_batch=lc_batch,
+#                    l2_regularization_strength=args.l2_regularization_strength)
+    loss = create_loss(audio_batch=audio_batch,
+                       text_batch=text_batch,
+                       loss_prefix='train_',
+                       net=net,
+                       text_encoder=text_encoder,
+                       param_producer=param_producer)
 
     if test_text_batch is not None:
-        test_loss = net.loss(input_batch=test_audio_batch,
-                         global_condition_batch=test_gc_id_batch,
-                         local_condition_batch=test_lc_batch,
-                         l2_regularization_strength=
-                            args.l2_regularization_strength,
-                         loss_prefix='test_')
+        test_loss = create_loss(audio_batch=test_audio_batch,
+                           text_batch=test_text_batch,
+                           loss_prefix='test_',
+                           net=net,
+                           text_encoder=text_encoder,
+                           param_producer=param_producer)
+
+
+#        test_loss = net.loss(input_batch=test_audio_batch,
+#                         global_condition_batch=test_gc_id_batch,
+#                         local_condition_batch=test_lc_batch,
+#                         l2_regularization_strength=
+#                            args.l2_regularization_strength,
+#                         loss_prefix='test_')
+
+##--------------------------------------
+
 
     optimizer = optimizer_factory[args.optimizer](
                     learning_rate=args.learning_rate,

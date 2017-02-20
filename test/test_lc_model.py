@@ -31,10 +31,10 @@ F3 = 233.08  # B-flat frequency in hz
 UPSAMPLE_RATE = 200
 MEDIAN_SAMPLES_PER_CHAR = 200
 LAYER_COUNT = 6
-TEXT_ENCODER_CHANNELS = 16
+TEXT_ENCODER_CHANNELS = 32
 TEXT_ENCODER_CHANNELS_NON_DILATED = 128
-TEXT_ENCODER_OUTPUT_CHANNELS = 128
-LOCAL_CONDITION_CHANNELS = 128
+TEXT_ENCODER_OUTPUT_CHANNELS = 32
+LOCAL_CONDITION_CHANNELS = 32
 LARGEST_DURATION_RATIO = 1.2
 SMALLEST_DURATION_RATIO=0.8
 
@@ -105,36 +105,37 @@ class TestLCNet(tf.test.TestCase):
         sys.stdout.flush()
 
         self.optimizer_type = 'adam'
-        self.learning_rate = 0.0004
+        self.learning_rate = 0.0001
         self.generate = False
         self.momentum = 0.9
         self.global_conditioning = False
         self.train_iters = 100
-#        self.net = WaveNetModel(
-#            dilations=[1, 2, 4, 8, 16, 32, 64, 128, 256,
-#                       1, 2, 4, 8, 16, 32, 64, 128, 256,
-#                       1, 2, 4, 8, 16, 32, 64, 128, 256],
-#            filter_width=2,
-#            residual_channels=16,
-#            dilation_channels=16,
-#            quantization_channels=QUANTIZATION_CHANNELS,
-#            use_biases=True,
-#            skip_channels=256,
-#            local_condition_channels=LOCAL_CONDITION_CHANNELS,
-#            gated_linear=False)
+        self.net = WaveNetModel(
+            dilations=[1, 2, 4, 8, 16, 32, 64, 128, 256,
+                       1, 2, 4, 8, 16, 32, 64, 128, 256,
+                       1, 2, 4, 8, 16, 32, 64, 128, 256],
+            filter_width=2,
+            residual_channels=16,
+            dilation_channels=16,
+            quantization_channels=QUANTIZATION_CHANNELS,
+            use_biases=True,
+            skip_channels=256,
+            local_condition_channels=LOCAL_CONDITION_CHANNELS,
+            gated_linear=False)
 
-#        # Create text encoder network.
-#        self.text_encoder = ConvNetModel(
-#            encoder_channels=TEXT_ENCODER_CHANNELS,
-#            histograms=False,
-#            output_channels=TEXT_ENCODER_OUTPUT_CHANNELS,
-#            local_condition_channels=LOCAL_CONDITION_CHANNELS,
-#            layer_count=None,
-#            dilations=[1, 2, 4, 8, 16, 32, 64, 128, 256,
-#                       1, 2, 4, 8, 16, 32, 64, 128, 256,
-#                       1, 2, 4, 8, 16, 32, 64, 128, 256],
-#            gated_linear=False,
-#            density_conditioned=True)
+        # Create text encoder network.
+        density_conditioning_options = {'density_conditioned':True,
+            'min_sample_density':SMALLEST_DURATION_RATIO * MEDIAN_SAMPLES_PER_CHAR,
+            'max_sample_density':LARGEST_DURATION_RATIO * MEDIAN_SAMPLES_PER_CHAR}
+        self.text_encoder = ConvNetModel(
+            encoder_channels=TEXT_ENCODER_CHANNELS_NON_DILATED,
+            histograms=False,
+            output_channels=TEXT_ENCODER_OUTPUT_CHANNELS,
+            local_condition_channels=LOCAL_CONDITION_CHANNELS,
+            layer_count=3,
+            gated_linear=False,
+            density_options=density_conditioning_options)
+
 
         self.audio_placeholder = tf.placeholder(dtype=tf.float32)
         self.gc_placeholder = tf.placeholder(dtype=tf.int32)  \
@@ -550,7 +551,7 @@ class TestLCNet(tf.test.TestCase):
 #                    (audio, speaker_ids, ascii) = self._make_training_data()
 
                 (audio, speaker_ids, ascii, duration_ratio) =  \
-                    self._make_training_pair()
+                     self._make_training_pair()
                 # Rotate through each input/target-output-pair.
                 feed_dict = {self.audio_placeholder: audio,
                              self.ascii_placeholder: ascii}
@@ -617,7 +618,7 @@ class TestHyperTraining(TestLCNet):
         self.generate = True
         self.momentum = 0.9
         self.global_conditioning = False
-        self.train_iters = 40000
+        self.train_iters = 15000
         self.net = WaveNetModel(
             dilations=[1, 2, 4, 8, 16, 32, 64, 128, 256,
                        1, 2, 4, 8, 16, 32, 64, 128, 256,
@@ -634,6 +635,8 @@ class TestHyperTraining(TestLCNet):
             # This set of non-computed params leaves only the time conv
             # filters to be computed, since those are the ones that need to
             # be conditioned upon the sample density (audio samples per char).
+            # The conv filter params will be computed hypernet style
+            # as they are conditioned upon sample density.
             non_computed_params=['embedding',
                                  'dense',
                                  'skip',
@@ -642,7 +645,9 @@ class TestHyperTraining(TestLCNet):
                                  'filter_bias',
                                  'gate_bias',
                                  'postprocess1',
-                                 'postprocess2'])
+                                 'postprocess2'],
+            frequency_domain_loss = False,
+            sample_rate=SAMPLE_RATE_HZ)
 
         # Create text encoder network.
         self.text_encoder = ConvNetModel(
@@ -653,19 +658,22 @@ class TestHyperTraining(TestLCNet):
             layer_count=3,
             dilations=None,
             gated_linear=False,
-            density_conditioned=False,
+            density_options=None,
             compute_the_params=False)
 
         input_spec = InputSpec(
             kind='quantized_scalar',
             name='sample_density',
-            opts={'quant_levels':21, 'range_min':SMALLEST_DURATION_RATIO,
-                    'range_max': LARGEST_DURATION_RATIO})
+            opts={'quant_levels':21,
+                  'range_min':float(SMALLEST_DURATION_RATIO * MEDIAN_SAMPLES_PER_CHAR),
+                  'range_max':float(LARGEST_DURATION_RATIO * MEDIAN_SAMPLES_PER_CHAR)})
+#                  'range_min':0.0,
+#                  'range_max':6.0})
 
         self.parameter_producer = ParamProducerModel(
             input_spec=input_spec,
             output_specs=self.net.param_specs,
-            residual_channels=512)
+            residual_channels=16)
 
         self.audio_placeholder = tf.placeholder(dtype=tf.float32, name='audio_placeholder')
         self.gc_placeholder = tf.placeholder(dtype=tf.int32, name='gc_placeholder')  \

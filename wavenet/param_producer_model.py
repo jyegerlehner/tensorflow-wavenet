@@ -6,7 +6,7 @@ from .paramspec import (create_vars, StoredParm, ComputedParm,
 
 from .ops import (quantize_value, create_variable, create_embedding_table,
                   create_bias_variable, gated_residual_layer, shape_size,
-                  quantize_interp_embedding)
+                  quantize_interp_embedding, create_repeated_embedding)
 
 # This is used for the size of the representation vector in the net,
 # including the input's embedding size all the way up until the
@@ -62,6 +62,10 @@ class ParamProducerModel:
         self.input_spec = input_spec
         self.name = name
         self.residual_channels = residual_channels
+        self.encoded_input = None
+        self.lb = None
+        self.ub = None
+        self.interp_ratio = None
 
 #    def _embed_density(self, sample_density):
 #        quantized_density = quantize_sample_density(
@@ -102,7 +106,7 @@ class ParamProducerModel:
                 input_value = tf.reshape(input_value, [1])
             quant_levels = self.input_spec.opts['quant_levels']
             table_shape = [quant_levels+1, self.residual_channels]
-            table = create_embedding_table(
+            table = create_repeated_embedding(
                             name=self.input_spec.name+"_embedding_table",
                             shape=table_shape)
             vect = quantize_interp_embedding(
@@ -144,11 +148,9 @@ class ParamProducerModel:
     def create_params(self, input_value):
         with tf.variable_scope('param_producer'):
             middle_representation = self._encode_input(input_value)
+            self.encoded_input = middle_representation
             middle_representation = self._common_layers(middle_representation)
 
-            print("====================================================")
-            print("Param Factory")
-            print("====================================================")
             param_factory = ParamFactory(middle_representation)
 
             # Create the recursive dict-of-dicts of tensors that the
