@@ -1,8 +1,12 @@
 {
-    "encoder_channels": 16,
+    "encoder_channels": 32,
     "encoder_output_channels": 128,
     "local_condition_channels": 32,
     "dilations": [1, 2, 4,
                   1, 2, 4,
-                  1, 2, 4]
+                  1, 2, 4,
+                  1, 2, 4],
+    "elu_not_relu": true,
+    "sample_density_min":500,
+    "sample_density_max":1500
 }

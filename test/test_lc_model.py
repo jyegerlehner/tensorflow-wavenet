@@ -33,8 +33,8 @@ MEDIAN_SAMPLES_PER_CHAR = 200
 LAYER_COUNT = 6
 TEXT_ENCODER_CHANNELS = 32
 TEXT_ENCODER_CHANNELS_NON_DILATED = 128
-TEXT_ENCODER_OUTPUT_CHANNELS = 32
-LOCAL_CONDITION_CHANNELS = 32
+TEXT_ENCODER_OUTPUT_CHANNELS = 64
+LOCAL_CONDITION_CHANNELS = 64
 LARGEST_DURATION_RATIO = 1.2
 SMALLEST_DURATION_RATIO=0.8
 
@@ -117,6 +117,7 @@ class TestLCNet(tf.test.TestCase):
             filter_width=2,
             residual_channels=16,
             dilation_channels=16,
+            elu_not_relu=True,
             quantization_channels=QUANTIZATION_CHANNELS,
             use_biases=True,
             skip_channels=256,
@@ -129,6 +130,7 @@ class TestLCNet(tf.test.TestCase):
             'max_sample_density':LARGEST_DURATION_RATIO * MEDIAN_SAMPLES_PER_CHAR}
         self.text_encoder = ConvNetModel(
             encoder_channels=TEXT_ENCODER_CHANNELS_NON_DILATED,
+            elu_not_relu=True,
             histograms=False,
             output_channels=TEXT_ENCODER_OUTPUT_CHANNELS,
             local_condition_channels=LOCAL_CONDITION_CHANNELS,
@@ -627,7 +629,8 @@ class TestHyperTraining(TestLCNet):
             residual_channels=32,
             dilation_channels=32,
             quantization_channels=QUANTIZATION_CHANNELS,
-            use_biases=True,
+            elu_not_relu=True,
+            use_biases=False,
             skip_channels=256,
             local_condition_channels=LOCAL_CONDITION_CHANNELS,
             gated_linear=False,
@@ -656,6 +659,7 @@ class TestHyperTraining(TestLCNet):
             output_channels=TEXT_ENCODER_OUTPUT_CHANNELS,
             local_condition_channels=LOCAL_CONDITION_CHANNELS,
             layer_count=3,
+            elu_not_relu=True,
             dilations=None,
             gated_linear=False,
             density_options=None,
@@ -673,7 +677,7 @@ class TestHyperTraining(TestLCNet):
         self.parameter_producer = ParamProducerModel(
             input_spec=input_spec,
             output_specs=self.net.param_specs,
-            residual_channels=16)
+            residual_channels=32)
 
         self.audio_placeholder = tf.placeholder(dtype=tf.float32, name='audio_placeholder')
         self.gc_placeholder = tf.placeholder(dtype=tf.int32, name='gc_placeholder')  \
@@ -703,7 +707,7 @@ class TestHyperTraining(TestLCNet):
             input_value=sample_density)
         self.net.merge_params(encoder_params)
 
-        #show_params(self.text_encoder.variables)
+        # show_params(self.text_encoder.variables)
 
         local_conditions = self.text_encoder.upsample(
             self.ascii_placeholder, audio_length, sample_density)

@@ -20,6 +20,7 @@ class ConvNetModel(object):
                  histograms,
                  output_channels,
                  local_condition_channels,
+                 elu_not_relu,
                  layer_count=None,
                  dilations=None,
                  gated_linear=False,
@@ -46,6 +47,7 @@ class ConvNetModel(object):
         self.embedding_shape = None
         self.text_shape = None
         self.gated_linear = gated_linear
+        self.elu_not_relu = elu_not_relu
         # True if this net is conditioning on density.
         if density_options is None:
             self.density_conditioned = False
@@ -128,6 +130,12 @@ class ConvNetModel(object):
                                    kind='embedding'))
 
         c = t.add_child('layer_stack')
+        l = c.add_child('input_skip')
+        l.add_param(self._make_spec(name='skip',
+                                    shape=[1,
+                                           self.encoder_channels,
+                                           self.output_channels],
+                                    kind='filter'))
         for layer in range(self.layer_count):
             l = c.add_child('layer{}'.format(layer))
             l.add_param(self._make_spec(name='filter',
@@ -213,6 +221,18 @@ class ConvNetModel(object):
                                   # computed params.
                                   computed_not_stored=False,
                                   parm_factory=create_var)
+
+
+    def _input_contrib(self, input_embedding):
+        weights = self.variables[TOP_NAME]['layer_stack']['input_skip']['skip']
+        filtered = tf.nn.conv1d(value=input_embedding,
+                                filters=weights,
+                                stride=1,
+                                padding='SAME',
+                                name='input_skip_contrib')
+        filtered = tf.nn.elu(filtered) if self.elu_not_relu else \
+                      tf.nn.relu(filtered)
+        return filtered
 
 
     def _create_layer(self, input, layer_index, output_width, dilation,
@@ -314,7 +334,6 @@ class ConvNetModel(object):
     def _density_embedding(self, sample_density):
         if not self.density_conditioned:
             return None
-
         sample_density = tf.reshape(sample_density, [1])
         table = self.variables[TOP_NAME]['embeddings']['density_embedding']
         density_embedding = quantize_interp_embedding(
@@ -327,9 +346,10 @@ class ConvNetModel(object):
         density_embedding = tf.reshape(density_embedding, shape)
         return density_embedding
 
-    def _create_network(self, input_batch, ascii_length, sample_density):
+    def _create_network(self, input_batch, ascii_length, sample_density,
+                        unpadded_input):
         with tf.name_scope('layer_stack'):
-            skip_outs = []
+            skip_outs = [self._input_contrib(unpadded_input)]
             current_layer = input_batch
             density_embedding = self._density_embedding(sample_density)
             for i in range(self.layer_count):
@@ -351,9 +371,12 @@ class ConvNetModel(object):
             b2 = postproc_vars['bias2']
 
             total = sum(skip_outs) + b1
-            transformed1 = tf.nn.relu(total)
+
+            transformed1 = tf.nn.elu(total) if self.elu_not_relu else \
+                                tf.nn.relu(total)
             conv1 = tf.nn.conv1d(transformed1, w1, stride=1, padding="SAME")
-            transformed2 = tf.nn.relu(conv1 + b2)
+            transformed2 = tf.nn.elu(conv1 + b2) if self.elu_not_relu else \
+                                tf.nn.relu(conv1 + b2)
             conv2 = tf.nn.conv1d(transformed2, w2, stride=1, padding="SAME")
 
             filt = postproc_vars['lc_proj_filter']
@@ -377,21 +400,20 @@ class ConvNetModel(object):
     def _upsample(self, embedding, audio_length, sample_density):
         with tf.name_scope('upsampling'):
             # Number of samples we've currently got if we preserve density.
-            number_samples = sample_density * tf.cast(
-                tf.shape(embedding)[1], dtype=tf.float32)
-            number_samples = tf.cast(tf.ceil(number_samples), dtype=tf.int32)
+#            number_samples = sample_density * tf.cast(
+#                tf.shape(embedding)[1], dtype=tf.float32)
+#            number_samples = tf.cast(tf.ceil(number_samples), dtype=tf.int32)
+            number_samples = audio_length
 
-            with tf.control_dependencies([tf.assert_equal(number_samples,
-                                          audio_length)]):
-                # Reshape so we can use image resize on it: height = 1
-                embedding = tf.expand_dims(embedding, axis=1)
-#                upsampled = tf.image.resize_bilinear(embedding,
-#                                                    [1, number_samples])
-                upsampled = tf.image.resize_nearest_neighbor(embedding,
-                                                    [1, number_samples])
-                # Remove the dummy "height=1" dimension we added for the resize
-                # to bring it back to batch x duration x channels.
-                upsampled = tf.squeeze(upsampled, axis=1)
+#            with tf.control_dependencies([tf.assert_equal(number_samples,
+#                                          audio_length)]):
+            # Reshape so we can use image resize on it: height = 1
+            embedding = tf.expand_dims(embedding, axis=1)
+            upsampled = tf.image.resize_nearest_neighbor(embedding,
+                                                [1, number_samples])
+            # Remove the dummy "height=1" dimension we added for the resize
+            # to bring it back to batch x duration x channels.
+            upsampled = tf.squeeze(upsampled, axis=1)
 
             return upsampled
 
@@ -414,19 +436,21 @@ class ConvNetModel(object):
                                   ]['text_embedding']
             embedding = tf.nn.embedding_lookup(embedding_table,
                                                padded_ascii)
+            unpadded_embedding = tf.nn.embedding_lookup(embedding_table, ascii)
             self.embedding_shape = tf.shape(embedding)
             shape = [1, -1, self.encoder_channels]
             embedding = tf.reshape(embedding, shape)
-        return embedding
+            unpadded_embedding = tf.reshape(unpadded_embedding, shape)
+        return (embedding, unpadded_embedding)
 
     def upsample(self, input_text, audio_length, sample_density):
         with tf.name_scope('text_conv_net'):
             self.text_shape = tf.shape(input_text)
-            embedding = self._embed_ascii(input_text)
+            (embedding, unpadded_embedding) = self._embed_ascii(input_text)
             # The 'output' is still character-resolution. Has the same width
             # as the input ascii string.
             output = self._create_network(embedding, self.text_shape[0],
-                                                      sample_density)
+                                          sample_density, unpadded_embedding)
             upsampled = self._upsample(output, audio_length, sample_density)
 
         return upsampled

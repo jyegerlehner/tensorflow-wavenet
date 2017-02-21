@@ -17,12 +17,14 @@ import time
 import tensorflow as tf
 from tensorflow.python.client import timeline
 
-from wavenet import WaveNetModel, AudioReader, optimizer_factory, ConvNetModel
+from wavenet import (WaveNetModel, AudioReader, optimizer_factory,
+                    ConvNetModel, InputSpec, ParamProducerModel,
+                    compute_sample_density)
 
 DATA_DIRECTORY = './VCTK-Corpus'
 LOGDIR_ROOT = './logdir'
 CHECKPOINT_EVERY = 50
-NUM_STEPS = int(1e5)
+NUM_STEPS = int(1e6)
 LEARNING_RATE = 1e-3
 WAVENET_PARAMS = './wavenet_params.json'
 ENCODER_PARAMS = './encoder_params.json'
@@ -210,12 +212,11 @@ def compute_test_loss(sess, test_steps, test_loss):
     accumulator /= test_steps
     return accumulator
 
-def create_loss(audio_batch, text_batch, loss_prefix,
-                net, text_encoder, param_producer)
+def create_loss(audio_batch, text_batch, loss_prefix, gc_id_batch,
+                net, text_encoder, param_producer):
     (sample_density, audio_length) = compute_sample_density(
         audio=audio_batch,
         text=text_batch)
-
     encoder_params = param_producer.create_params(
         input_value=sample_density)
     net.merge_params(encoder_params)
@@ -225,9 +226,7 @@ def create_loss(audio_batch, text_batch, loss_prefix,
                     local_condition_batch=local_conditions,
                     loss_prefix=loss_prefix,
                     l2_regularization_strength=0.0)
-
-
-
+    return (loss, sample_density)
 
 def main():
     args = get_arguments()
@@ -287,6 +286,7 @@ def main():
         histograms=args.histograms,
         output_channels=encoder_params['encoder_output_channels'],
         local_condition_channels=encoder_params['local_condition_channels'],
+        elu_not_relu=encoder_params["elu_not_relu"],
         dilations=encoder_params['dilations'],
         gated_linear=False,
         density_options=None,
@@ -304,13 +304,13 @@ def main():
         residual_channels=wavenet_params["residual_channels"],
         dilation_channels=wavenet_params["dilation_channels"],
         skip_channels=wavenet_params["skip_channels"],
+        elu_not_relu=wavenet_params["elu_not_relu"],
         quantization_channels=wavenet_params["quantization_channels"],
         use_biases=wavenet_params["use_biases"],
         histograms=args.histograms,
         global_condition_channels=args.gc_channels,
         global_condition_cardinality=reader.gc_category_cardinality,
         local_condition_channels=encoder_params["local_condition_channels"],
-        ctc_loss=False,
         gated_linear=False)
 
     input_spec = InputSpec(
@@ -318,37 +318,32 @@ def main():
         name='sample_density',
         opts={'quant_levels':41,
               'range_min': encoder_params["sample_density_min"], # float(SMALLEST_DURATION_RATIO * MEDIAN_SAMPLES_PER_CHAR),
-              'range_max': encoder_params["sample_density_max"]} # float(LARGEST_DURATION_RATIO * MEDIAN_SAMPLES_PER_CHAR)})
+              'range_max': encoder_params["sample_density_max"]}) # float(LARGEST_DURATION_RATIO * MEDIAN_SAMPLES_PER_CHAR)})
 
     param_producer = ParamProducerModel(
         input_spec=input_spec,
         output_specs=net.param_specs,
-        residula_channels=16)
+        residual_channels=16)
 
     if args.l2_regularization_strength == 0:
         args.l2_regularization_strength = None
 
     text_batch = tf.squeeze(text_batch)
 
-    lc_batch = text_encoder.upsample(text_batch, tf.shape(audio_batch)[0])
-    if test_text_batch is not None:
-        test_text_batch = tf.squeeze(test_text_batch)
-        test_lc_batch = text_encoder.upsample(test_text_batch,
-                                          tf.shape(test_audio_batch)[0])
-#    loss = net.loss(input_batch=audio_batch,
-#                    global_condition_batch=gc_id_batch,
-#                    local_condition_batch=lc_batch,
-#                    l2_regularization_strength=args.l2_regularization_strength)
-    loss = create_loss(audio_batch=audio_batch,
+    (loss, sample_density) = create_loss(audio_batch=audio_batch,
                        text_batch=text_batch,
+                       gc_id_batch=gc_id_batch,
                        loss_prefix='train_',
                        net=net,
                        text_encoder=text_encoder,
                        param_producer=param_producer)
 
     if test_text_batch is not None:
-        test_loss = create_loss(audio_batch=test_audio_batch,
+        test_text_batch = tf.squeeze(test_text_batch)
+        (test_loss, test_sample_density) = create_loss(
+                           audio_batch=test_audio_batch,
                            text_batch=test_text_batch,
+                           gc_id_batch=test_gc_id_batch,
                            loss_prefix='test_',
                            net=net,
                            text_encoder=text_encoder,
@@ -361,7 +356,6 @@ def main():
 #                         l2_regularization_strength=
 #                            args.l2_regularization_strength,
 #                         loss_prefix='test_')
-
 ##--------------------------------------
 
 
@@ -372,10 +366,10 @@ def main():
     optim = optimizer.minimize(loss, var_list=trainable)
 
     # Set up logging for TensorBoard.
-    writer = tf.train.SummaryWriter(logdir)
+    writer = tf.summary.FileWriter(logdir)
     writer.add_graph(tf.get_default_graph())
     run_metadata = tf.RunMetadata()
-    summaries = tf.merge_all_summaries()
+    summaries = tf.summary.merge_all()
 
     # Set up session
     with tf.Session(config=tf.ConfigProto(log_device_placement=False)) as sess:
@@ -404,6 +398,7 @@ def main():
         test_loss_value = 0.0
         try:
             last_saved_step = saved_global_step
+            print("saved_step:{}, num_steps:{}".format(saved_global_step, args.num_steps))
             for step in range(saved_global_step + 1, args.num_steps):
                 if coord.should_stop():
                     break
@@ -413,8 +408,8 @@ def main():
                     print('Storing metadata')
                     run_options = tf.RunOptions(
                         trace_level=tf.RunOptions.FULL_TRACE)
-                    summary, loss_value, _, sample_density = sess.run(
-                        [summaries, loss, optim, text_encoder.sample_density],
+                    summary, loss_value, _, sample_density_value = sess.run(
+                        [summaries, loss, optim, sample_density],
                         options=run_options,
                         run_metadata=run_metadata)
                     writer.add_summary(summary, step)
@@ -425,8 +420,8 @@ def main():
                     with open(timeline_path, 'w') as f:
                         f.write(tl.generate_chrome_trace_format(show_memory=True))
                 else:
-                    summary, loss_value, _, sample_density = sess.run([summaries,
-                        loss, optim, text_encoder.sample_density])
+                    summary, loss_value, _, sample_density_value = sess.run([summaries,
+                        loss, optim, sample_density])
                     writer.add_summary(summary, step)
 
                 # Print an asterisk only if we've recomputed test loss.
@@ -442,13 +437,14 @@ def main():
                 print('step {:d} - loss = {:.3f}, last test loss = {:3f},'
                       ' ({:.3f} sec/step), samp density = {:2} {}'
                       .format(step, loss_value, test_loss_value, duration,
-                              sample_density, test_computed))
+                              sample_density_value, test_computed))
 
                 if step % args.checkpoint_every == 0:
                     save(saver, sess, logdir, step)
                     last_saved_step = step
 
         except Exception, e:
+            print("e:{}".format(e))
             # Introduce a line break after ^C is displayed so save message
             # is on its own line.
             print()

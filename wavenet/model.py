@@ -33,6 +33,7 @@ class WaveNetModel(object):
                  residual_channels,
                  dilation_channels,
                  skip_channels,
+                 elu_not_relu,
                  quantization_channels=2**8,
                  use_biases=False,
                  scalar_input=False,
@@ -102,6 +103,7 @@ class WaveNetModel(object):
         self.global_condition_channels = global_condition_channels
         self.global_condition_cardinality = global_condition_cardinality
         self.local_condition_channels = local_condition_channels
+        self.elu_not_relu = elu_not_relu
         # Add one category for "blank"
         self.softmax_channels = self.quantization_channels
         self.gated_linear = gated_linear
@@ -505,11 +507,14 @@ class WaveNetModel(object):
             total = sum(outputs)
             if self.use_biases:
                 total += b1
-            transformed1 = tf.nn.relu(total)
+            transformed1 = tf.nn.elu(total) if self.elu_not_relu else \
+                                tf.nn.relu(total)
+
             conv1 = tf.nn.conv1d(transformed1, w1, stride=1, padding="SAME")
             if self.use_biases:
                 conv1 += b2
-            transformed2 = tf.nn.relu(conv1)
+            transformed2 = tf.nn.elu(conv1) if self.elu_not_relu else \
+                                tf.nn.relu(conv1)
             conv2 = tf.nn.conv1d(transformed2, w2, stride=1, padding="SAME")
 
         return conv2
