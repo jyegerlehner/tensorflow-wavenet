@@ -192,7 +192,7 @@ class WaveNetModel(object):
         for i, dilation in enumerate(self.dilations):
             # with tf.variable_scope('layer{}'.format(i)):
             l = c.add_child('layer{}'.format(i))
-            if (i == 0 and self.local_condition_channels is not None):
+            if self.local_condition_channels is not None:
                 input_channels = self.residual_channels + \
                                  self.local_condition_channels
             else:
@@ -338,7 +338,7 @@ class WaveNetModel(object):
         weights_filter = variables['filter']
         weights_gate = variables['gate']
 
-        if layer_index == 0 and local_condition_batch is not None:
+        if local_condition_batch is not None:
             conv_filt_inp = tf.concat(axis=2,
                                       values=[local_condition_batch,
                                               input_batch])
