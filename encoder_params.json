@@ -1,6 +1,6 @@
 {
-    "encoder_channels": 32,
-    "encoder_output_channels": 128,
+    "encoder_channels": 128,
+    "encoder_output_channels": 256,
     "local_condition_channels": 32,
     "dilations": [1, 2, 4,
                   1, 2, 4,
