@@ -280,6 +280,9 @@ def main():
          test_text_batch, test_gc_id_batch) = \
             get_input_batch(gc_enabled, test_interval, reader)
 
+    dilations = encoder_params['dilations']
+    if len(dilations) == 0:
+        dilations = None
     # Create text encoder network.
     text_encoder = ConvNetModel(
         encoder_channels=encoder_params["encoder_channels"],
@@ -287,7 +290,8 @@ def main():
         output_channels=encoder_params['encoder_output_channels'],
         local_condition_channels=encoder_params['local_condition_channels'],
         elu_not_relu=encoder_params["elu_not_relu"],
-        dilations=encoder_params['dilations'],
+        layer_count=encoder_params["layer_count"],
+        dilations=dilations,
         gated_linear=False,
         density_options=None,
         compute_the_params=False,
