@@ -10,8 +10,9 @@ import librosa
 import numpy as np
 import tensorflow as tf
 
-from wavenet import (WaveNetModel, mu_law_decode, mu_law_encode, audio_reader,
-                     ConvNetModel)
+from wavenet import (WaveNetModel, AudioReader, optimizer_factory,
+                    ConvNetModel, InputSpec, ParamProducerModel,
+                    compute_sample_density, mu_law_decode, mu_law_encode)
 
 SAMPLES = 16000
 TEMPERATURE = 1.0
@@ -115,6 +116,9 @@ def get_arguments():
         type=int,
         default=None,
         help='ID of category to generate, if globally conditioned.')
+    parser.add_argument('--histograms', type=_str_to_bool, default=False,
+                         help='Whether to store histogram summaries.')
+
 #    parser.add_argument(
 #        '--encoder_channels', type=int,
 #        default=ENCODER_CHANNELS,
@@ -139,7 +143,7 @@ def get_arguments():
     parser.add_argument(
         '--text',
         type=str,
-        default='Here we go.',
+        default='   I, I, I, do not really think so.',
         help='Text to convert to speech.')
 
     arguments = parser.parse_args()
@@ -180,34 +184,57 @@ def main():
     sess = tf.Session()
 
     net = WaveNetModel(
-        dilations=wavenet_params['dilations'],
-        filter_width=wavenet_params['filter_width'],
-        residual_channels=wavenet_params['residual_channels'],
-        dilation_channels=wavenet_params['dilation_channels'],
-        quantization_channels=wavenet_params['quantization_channels'],
-        skip_channels=wavenet_params['skip_channels'],
-        use_biases=wavenet_params['use_biases'],
-        histograms=False,
+        dilations=wavenet_params["dilations"],
+        filter_width=wavenet_params["filter_width"],
+        residual_channels=wavenet_params["residual_channels"],
+        dilation_channels=wavenet_params["dilation_channels"],
+        skip_channels=wavenet_params["skip_channels"],
+        elu_not_relu=wavenet_params["elu_not_relu"],
+        quantization_channels=wavenet_params["quantization_channels"],
+        use_biases=wavenet_params["use_biases"],
+        histograms=args.histograms,
         global_condition_channels=args.gc_channels,
-        global_condition_cardinality=args.gc_cardinality,
-        local_condition_channels=encoder_params["local_condition_channels"])
+        global_condition_cardinality=args.gc_cardinality, # reader.gc_category_cardinality,
+        local_condition_channels=encoder_params["local_condition_channels"],
+        gated_linear=False)
 
+    dilations = encoder_params['dilations']
+    if len(dilations) == 0:
+        dilations = None
+    # Create text encoder network.
     text_encoder = ConvNetModel(
         encoder_channels=encoder_params["encoder_channels"],
-        histograms=False,
+        histograms=args.histograms,
         output_channels=encoder_params['encoder_output_channels'],
         local_condition_channels=encoder_params['local_condition_channels'],
-        upsample_rate=encoder_params['median_upsample_rate'],
-        dilations=encoder_params['dilations'],
+        elu_not_relu=encoder_params["elu_not_relu"],
+        layer_count=encoder_params["layer_count"],
+        dilations=dilations,
         gated_linear=False,
-        density_conditioned=True)
+        density_options=None,
+        compute_the_params=False,
+        non_computed_params=None)
+    input_spec = InputSpec(
+        kind='quantized_scalar',
+        name='sample_density',
+        opts={'quant_levels':41,
+              'range_min': encoder_params["sample_density_min"], # float(SMALLEST_DURATION_RATIO * MEDIAN_SAMPLES_PER_CHAR),
+              'range_max': encoder_params["sample_density_max"]}) # float(LARGEST_DURATION_RATIO * MEDIAN_SAMPLES_PER_CHAR)})
+
+    param_producer = ParamProducerModel(
+        input_spec=input_spec,
+        output_specs=net.param_specs,
+        residual_channels=16)
+
+    median_upsample_rate = (encoder_params['sample_density_min'] +
+                           encoder_params['sample_density_max']) / 2.0
 
     text = args.text
     duration_in_characters = len(text)
-    duration_in_samples = duration_in_characters * \
-                          encoder_params['median_upsample_rate'] * \
-                          duration_ratio
+    sample_density = median_upsample_rate * duration_ratio
+    duration_in_samples = duration_in_characters * sample_density
     duration_in_samples = int(duration_in_samples)
+    sample_density_tf = tf.cast(sample_density, dtype=tf.float32)
 
     samples = tf.placeholder(tf.int32)
     lc_placeholder = tf.placeholder(dtype=tf.float32)
@@ -217,8 +244,18 @@ def main():
     ascii = [ord(achar) for achar in text]
     ascii = np.reshape(ascii, [-1])
 
-    local_conditions = text_encoder.upsample(ascii, duration_in_samples)
-    next_sample = net.predict_proba(samples, args.gc_id, lc_placeholder)
+#    (sample_density, audio_length) = compute_sample_density(
+#        audio=audio_batch,
+#        text=text_batch)
+    encoder_params = param_producer.create_params(input_value=sample_density_tf)
+    net.merge_params(encoder_params)
+    local_conditions=text_encoder.upsample(ascii, duration_in_samples, sample_density_tf)
+    next_sample = net.predict_proba(waveform=samples,
+                                    global_condition=args.gc_id,
+                                    local_condition=lc_placeholder)
+
+#    local_conditions = text_encoder.upsample(ascii, duration_in_samples)
+#    next_sample = net.predict_proba(samples, args.gc_id, lc_placeholder)
 
     variables_to_restore = {
         var.name[:-2]: var for var in tf.all_variables()
@@ -294,19 +331,20 @@ def main():
     # Introduce a newline to clear the carriage return from the progress.
     print()
 
-    # Save the result as an audio summary.
-    datestring = str(datetime.now()).replace(' ', 'T')
-    writer = tf.train.SummaryWriter(logdir)
-    tf.audio_summary('generated', decode, wavenet_params['sample_rate'])
-    summaries = tf.merge_all_summaries()
-    summary_out = sess.run(summaries,
-                           feed_dict={samples: np.reshape(waveform, [-1, 1])})
-    writer.add_summary(summary_out)
-
-    # Save the result as a wav file.
+# Save the result as a wav file.
     if args.wav_out_path:
         out = sess.run(decode, feed_dict={samples: waveform})
         write_wav(out, wavenet_params['sample_rate'], args.wav_out_path)
+
+#    # Save the result as an audio summary.
+#    datestring = str(datetime.now()).replace(' ', 'T')
+#    writer = tf.summary.FileWriter(logdir)
+#    tf.audio_summary('generated', decode, wavenet_params['sample_rate'])
+#    summaries = tf.summary.merge_all()
+#    summary_out = sess.run(summaries,
+#                           feed_dict={samples: np.reshape(waveform, [-1, 1])})
+#    writer.add_summary(summary_out)
+
 
     print('Finished generating. The result can be viewed in TensorBoard.')
 
