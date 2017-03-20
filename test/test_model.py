@@ -196,11 +196,14 @@ class TestNet(tf.test.TestCase):
                                 filter_width=2,
                                 residual_channels=32,
                                 dilation_channels=32,
+                                elu_not_relu=True,
                                 quantization_channels=QUANTIZATION_CHANNELS,
+                                use_biases=True,
                                 skip_channels=32,
                                 global_condition_channels=None,
                                 global_condition_cardinality=None,
-                                local_condition_channels=None)
+                                local_condition_channels=None,
+                                gated_linear=False)
 
 
     def _save_net(self, sess):
@@ -268,7 +271,7 @@ class TestNet(tf.test.TestCase):
                       learning_rate=self.learning_rate, momentum=self.momentum)
         trainable = tf.trainable_variables()
         optim = optimizer.minimize(loss, var_list=trainable)
-        init = tf.initialize_all_variables()
+        init = tf.global_variables_initializer()
 
         generated_waveform = None
         loss_val = self.max_allowed_loss
@@ -362,6 +365,7 @@ class TestNetWithBiases(TestNet):
                                 residual_channels=32,
                                 dilation_channels=32,
                                 quantization_channels=QUANTIZATION_CHANNELS,
+                                elu_not_relu=True,
                                 use_biases=True,
                                 skip_channels=32)
         self.optimizer_type = 'sgd'
@@ -385,8 +389,9 @@ class TestNetWithRMSProp(TestNet):
                                 residual_channels=32,
                                 dilation_channels=32,
                                 quantization_channels=QUANTIZATION_CHANNELS,
-                                skip_channels=256,
-                                use_biases=True)
+                                elu_not_relu=True,
+                                use_biases=True,
+                                skip_channels=256)
         self.optimizer_type = 'rmsprop'
         self.learning_rate = 0.001
         self.generate = False
