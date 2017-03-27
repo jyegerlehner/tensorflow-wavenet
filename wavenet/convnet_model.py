@@ -58,7 +58,7 @@ class ConvNetModel(object):
         self.compute_the_params = compute_the_params
         self.non_computed_params = non_computed_params
         self.param_specs=None
-        self.variables = self._create_vars()
+        (self.variables, self.orthog_reg_losses) = self._create_vars()
 
     def _receptive_field(self):
         if self.dilations is None:
@@ -71,7 +71,7 @@ class ConvNetModel(object):
             size = max_dilation*2 + (num_stacks-1)*(max_dilation*2-1)
             return size
 
-    def _make_spec(self, name, shape, kind):
+    def _make_spec(self, name, shape, kind, regularization=False):
         def has_match(name, tokens):
             match = False
             for token in tokens:
@@ -84,11 +84,14 @@ class ConvNetModel(object):
             # non_computed_params is list of tokens, such that if that token
             # appears in the parameter name, it is not computed.
             if has_match(name, self.non_computed_params):
-                return StoredParm(name=name, shape=shape, kind=kind)
+                return StoredParm(name=name, shape=shape, kind=kind,
+                                  regularization=regularization)
             else:
-                return ComputedParm(name=name, shape=shape, kind=kind)
+                return ComputedParm(name=name, shape=shape, kind=kind,
+                                    regularization=regularization)
         else:
-            return StoredParm(name=name, shape=shape, kind=kind)
+            return StoredParm(name=name, shape=shape, kind=kind,
+                              regularization=regularization)
 
 
     def _add_recursively(self, name, newvars, vars):
@@ -152,7 +155,8 @@ class ConvNetModel(object):
                                    shape=[1,
                                           self.encoder_channels,
                                           self.output_channels],
-                                   kind='filter'))
+                                   kind='filter',
+                                   regularization=True))
             l.add_param(self._make_spec(name='filter_bias',
                                    shape=[self.encoder_channels],
                                    kind='bias'))
@@ -164,12 +168,14 @@ class ConvNetModel(object):
                                        shape=[1,
                                               self.encoder_channels,
                                               self.encoder_channels],
-                                       kind='filter'))
+                                       kind='filter',
+                                       regularization=True))
                 l.add_param(self._make_spec(name='sd_gate',
                                        shape=[1,
                                               self.encoder_channels,
                                               self.encoder_channels],
-                                       kind='filter'))
+                                       kind='filter',
+                                       regularization=True))
                 l.add_param(self._make_spec(name='sd_filt_bias',
                                        shape=[self.encoder_channels],
                                        kind='bias'))
@@ -181,7 +187,8 @@ class ConvNetModel(object):
                                        shape=[1,
                                               self.encoder_channels,
                                               self.encoder_channels],
-                                       kind='filter'))
+                                       kind='filter',
+                                       regularization=True))
                 l.add_param(self._make_spec(name='dense_bias',
                                        shape=[self.encoder_channels],
                                        kind='bias'))
@@ -191,12 +198,14 @@ class ConvNetModel(object):
                                shape=[1,
                                       self.output_channels,
                                       self.output_channels],
-                               kind='filter'))
+                               kind='filter',
+                               regularization=True))
         c.add_param(self._make_spec(name='postprocess2',
                                shape=[1,
                                       self.output_channels,
                                       self.output_channels],
-                               kind='filter'))
+                               kind='filter',
+                               regularization=True))
         c.add_param(self._make_spec(name='bias1',
                                shape=[self.output_channels],
                                kind='bias'))
@@ -207,7 +216,8 @@ class ConvNetModel(object):
                                shape=[1,
                                       self.output_channels,
                                       self.local_condition_channels],
-                               kind='filter'))
+                               kind='filter',
+                               regularization=True))
         return t
 
     def param_dict():

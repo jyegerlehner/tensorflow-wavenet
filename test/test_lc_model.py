@@ -106,10 +106,10 @@ class TestLCNet(tf.test.TestCase):
 
         self.optimizer_type = 'adam'
         self.learning_rate = 0.0001
-        self.generate = False
+        self.generate = True
         self.momentum = 0.9
         self.global_conditioning = False
-        self.train_iters = 100
+        self.train_iters = 15000
         self.net = WaveNetModel(
             dilations=[1, 2, 4, 8, 16, 32, 64, 128, 256,
                        1, 2, 4, 8, 16, 32, 64, 128, 256,
@@ -442,8 +442,9 @@ class TestLCNet(tf.test.TestCase):
                              global_condition_batch=self.gc_placeholder,
                              local_condition_batch=local_conditions)
 
+        orthog_reg_loss = self.net.orthog_loss()
 
-        return loss
+        return (loss, orthog_reg_loss)
 
     # Train a net on a short clip of 3 sine waves superimposed
     # (an e-flat chord).
@@ -484,7 +485,7 @@ class TestLCNet(tf.test.TestCase):
 #                    plt.plot(freqs[indices], power_spectrum[indices])
 #                    plt.show()
 
-        loss = self.create_loss()
+        (loss, orthog_reg_loss) = self.create_loss()
 
 
         optimizer = optimizer_factory[self.optimizer_type](
@@ -492,11 +493,15 @@ class TestLCNet(tf.test.TestCase):
         trainable = tf.trainable_variables()
         #optim = optimizer.minimize(loss, var_list=trainable)
         # clipped gradients:
+
+        if orthog_reg_loss is not None:
+            loss += orthog_reg_loss
+
         grads_and_vars = optimizer.compute_gradients(loss, var_list=trainable)
         def ClipIfNotNone(grad):
                  if grad is None:
                      return grad
-                 return tf.clip_by_value(grad, -0.3, 0.3)
+                 return tf.clip_by_value(grad, -1.0, 1.0)
 
         capped_grads_and_vars = [(ClipIfNotNone(gv[0]), gv[1]) for gv in grads_and_vars]
         def Norm(var):
@@ -617,10 +622,10 @@ class TestHyperTraining(TestLCNet):
         self.learning_rate = 0.0001
 #        self.optimizer_type = 'rmsprop'
 #        self.learning_rate = 0.001
-        self.generate = True
+        self.generate = False #True
         self.momentum = 0.9
         self.global_conditioning = False
-        self.train_iters = 15000
+        self.train_iters = 100 # 15000
         self.net = WaveNetModel(
             dilations=[1, 2, 4, 8, 16, 32, 64, 128, 256,
                        1, 2, 4, 8, 16, 32, 64, 128, 256,
@@ -715,7 +720,10 @@ class TestHyperTraining(TestLCNet):
         loss = self.net.loss(input_batch=self.audio_placeholder,
                              global_condition_batch=self.gc_placeholder,
                              local_condition_batch=local_conditions)
-        return loss
+
+        orthog_reg_loss = self.net.orthog_loss()
+
+        return (loss, orthog_reg_loss)
 
 
 #class TestDebug(tf.test.TestCase):

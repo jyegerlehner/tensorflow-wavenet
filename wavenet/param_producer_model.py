@@ -156,7 +156,7 @@ class ParamProducerModel:
             # Create the recursive dict-of-dicts of tensors that the
             # receiving network (the net whose parameters this net is
             # computing.
-            outputs = create_vars(spec_tree=self.output_specs,
+            (outputs, _ ) = create_vars(spec_tree=self.output_specs,
                                   computed_not_stored=True,
                                   parm_factory=param_factory)
 

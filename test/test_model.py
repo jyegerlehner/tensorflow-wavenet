@@ -14,7 +14,7 @@ from wavenet import (WaveNetModel, time_to_batch, batch_to_time, causal_conv,
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
 SAMPLE_RATE_HZ = 2000.0  # Hz
-TRAIN_ITERATIONS = 400
+TRAIN_ITERATIONS = 800
 SAMPLE_DURATION = 0.5  # Seconds
 SAMPLE_PERIOD_SECS = 1.0 / SAMPLE_RATE_HZ
 MOMENTUM = 0.95
@@ -194,7 +194,7 @@ class TestNet(tf.test.TestCase):
         self.net = WaveNetModel(dilations=[1, 2, 4, 8, 16, 32, 64,
                                            1, 2, 4, 8, 16, 32, 64],
                                 filter_width=2,
-                                residual_channels=32,
+                                residual_channels=16,
                                 dilation_channels=32,
                                 elu_not_relu=True,
                                 quantization_channels=QUANTIZATION_CHANNELS,
@@ -267,10 +267,13 @@ class TestNet(tf.test.TestCase):
 
         loss = self.net.loss(input_batch=audio_placeholder,
                              global_condition_batch=gc_placeholder)
+
+        orthog_loss = self.net.orthog_loss()
+
         optimizer = optimizer_factory[self.optimizer_type](
                       learning_rate=self.learning_rate, momentum=self.momentum)
         trainable = tf.trainable_variables()
-        optim = optimizer.minimize(loss, var_list=trainable)
+        optim = optimizer.minimize(loss + orthog_loss, var_list=trainable)
         init = tf.global_variables_initializer()
 
         generated_waveform = None
@@ -295,7 +298,9 @@ class TestNet(tf.test.TestCase):
                     if entropy_loss is not None:
                         print("i:{} loss:{} entropy loss:{}".format(i, results[0], results[2]))
                     else:
-                        print("i:{} loss:{}".format(i, results[0]))
+                        rl_val = sess.run(orthog_loss, feed_dict=feed_dict)
+                        print("i:{} loss:{} orthog reg loss:{}".format(i,
+                              results[0], rl_val))
 
 
             loss_val = results[0]
@@ -362,7 +367,7 @@ class TestNetWithBiases(TestNet):
         self.net = WaveNetModel(dilations=[1, 2, 4, 8, 16, 32, 64,
                                            1, 2, 4, 8, 16, 32, 64],
                                 filter_width=2,
-                                residual_channels=32,
+                                residual_channels=16,
                                 dilation_channels=32,
                                 quantization_channels=QUANTIZATION_CHANNELS,
                                 elu_not_relu=True,
@@ -386,7 +391,7 @@ class TestNetWithRMSProp(TestNet):
         self.net = WaveNetModel(dilations=[1, 2, 4, 8, 16, 32, 64,
                                            1, 2, 4, 8, 16, 32, 64],
                                 filter_width=2,
-                                residual_channels=32,
+                                residual_channels=16,
                                 dilation_channels=32,
                                 quantization_channels=QUANTIZATION_CHANNELS,
                                 elu_not_relu=True,

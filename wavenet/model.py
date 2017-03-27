@@ -125,12 +125,13 @@ class WaveNetModel(object):
         else:
             self.freqloss = None
 
-        self.variables = self._create_vars()
+        (self.variables, self.orthogonal_reg_losses) = self._create_vars()
         self.entropy_loss = None
         # Set this to false if you want only frequency domain loss.
         self.cross_entropy_loss = True
 
-    def _make_spec(self, name, shape, kind, initial_value=None):
+    def _make_spec(self, name, shape, kind, initial_value=None,
+                   regularization=False):
         def has_match(name, tokens):
             match = False
             for token in tokens:
@@ -143,24 +144,28 @@ class WaveNetModel(object):
             # non_computed_params is list of tokens, such that if that token
             # appears in the parameter name, it is not computed.
             if has_match(name, self.non_computed_params):
-                return StoredParm(name=name, shape=shape, kind=kind,
-                                  initial_value=initial_value)
+                return StoredParm(
+                    name=name, shape=shape, kind=kind,
+                    initial_value=initial_value,
+                    regularization=regularization)
             else:
-                return ComputedParm(name=name, shape=shape, kind=kind,
-                                    initial_value=initial_value)
+                return ComputedParm(
+                    name=name, shape=shape, kind=kind,
+                    initial_value=initial_value,
+                    regularization=regularization)
         else:
-            return StoredParm(name=name, shape=shape, kind=kind,
-                              initial_value=initial_value)
+            return StoredParm(
+                name=name, shape=shape, kind=kind,
+                initial_value=initial_value,
+                regularization=regularization)
 
     def _create_vars(self):
         self.param_specs = self.create_param_specs()
 
-        # Strip the top element off; it's just the name of the
-        # net.
         self.param_specs = self.param_specs  # self.param_specs.children[0]
         return create_vars(spec_tree=self.param_specs,
-                                  computed_not_stored=False,
-                                  parm_factory=create_var)
+                           computed_not_stored=False,
+                           parm_factory=create_var)
 
     def create_param_specs(self):
         '''This function creates all specs of all the parameters in the model.
@@ -203,7 +208,7 @@ class WaveNetModel(object):
                 shape=[self.filter_width,
                        input_channels,
                        self.dilation_channels],
-                       kind='filter'))
+                kind='filter'))
             l.add_param(self._make_spec(
                 name='gate',
                 shape=[self.filter_width,
@@ -215,26 +220,30 @@ class WaveNetModel(object):
                 shape=[1,
                        self.dilation_channels,
                        self.residual_channels],
-                kind='filter'))
+                kind='filter',
+                regularization=True))
             l.add_param(self._make_spec(
                 name='skip',
                 shape=[1,
                        self.dilation_channels,
                        self.skip_channels],
-                kind='filter'))
+                kind='filter',
+                regularization=True))
 
             if self.global_condition_channels is not None:
                 l.add_param(self._make_spec(
                     name='gc_gateweights',
                     shape=[1, self.global_condition_channels,
                            self.dilation_channels],
-                    kind='filter'))
+                    kind='filter',
+                    regularization=True))
 
                 l.add_param(self._make_spec(
                     name='gc_filtweights',
                     shape=[1, self.global_condition_channels,
                            self.dilation_channels],
-                    kind='filter'))
+                    kind='filter',
+                    regularization=True))
 
             if self.use_biases:
                 l.add_param(self._make_spec(
@@ -254,12 +263,14 @@ class WaveNetModel(object):
         c.add_param(self._make_spec(
             name='postprocess1',
             shape=[1, self.skip_channels, self.skip_channels],
-            kind='filter'))
+            kind='filter',
+            regularization=True))
 
         c.add_param(self._make_spec(
             name='postprocess2',
             shape=[1, self.skip_channels, self.softmax_channels],
-            kind='filter'))
+            kind='filter',
+            regularization=True))
 
         if self.use_biases:
             c.add_param(self._make_spec(
@@ -605,7 +616,6 @@ class WaveNetModel(object):
                 input_batch,
                 depth=self.softmax_channels,
                 dtype=tf.float32)
-            print("softmax_channels:{}".format(self.softmax_channels))
             encoded = tf.reshape(encoded,
                                  [1, -1, self.softmax_channels])
             return encoded
@@ -747,10 +757,19 @@ class WaveNetModel(object):
     def temperature(self):
         return self.variables[TOP_NAME]['postprocessing']['temperature']
 
+    # Returns the mean of all the orthogonal regularization losses.
+    def orthog_loss(self):
+        if len(self.orthogonal_reg_losses) > 0:
+            orthog_loss = sum([orthog_loss for orthog_loss in
+                                    self.orthogonal_reg_losses])
+            orthog_loss /= tf.to_float(len(self.orthogonal_reg_losses))
+        else:
+            orthog_loss = None
+        return orthog_loss
+
     def loss(self,
              input_batch,
              global_condition_batch=None,
-             l2_regularization_strength=None,
              loss_prefix='',
              name='wavenet',
              local_condition_batch=None):
@@ -817,19 +836,4 @@ class WaveNetModel(object):
 
                 tf.summary.scalar(loss_prefix+'loss', reduced_loss)
 
-                if l2_regularization_strength is None:
-                    return reduced_loss
-                else:
-                    # L2 regularization for all trainable parameters
-                    l2_loss = tf.add_n([tf.nn.l2_loss(v)
-                                        for v in tf.trainable_variables()
-                                        if not('bias' in v.name)])
-
-                    # Add the regularization term to the loss
-                    total_loss = (reduced_loss +
-                                  l2_regularization_strength * l2_loss)
-
-                    tf.summary.scalar(loss_prefix+'l2_loss', l2_loss)
-                    tf.summary.scalar(loss_prefix+'total_loss', total_loss)
-
-                    return total_loss
+                return reduced_loss

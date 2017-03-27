@@ -3,6 +3,8 @@
 import numpy as np
 import tensorflow as tf
 
+identities = dict()
+
 def create_variable_from_spec(param_spec):
     '''Create a convolution filter variable with the specified name and shape,
     and initialize it using Xavier initialition.'''
@@ -13,7 +15,47 @@ def create_variable_from_spec(param_spec):
     else:
         # variable = tf.Variable(initial_value=param_spec.initial_value)
         variable = tf.constant(value=param_spec.initial_value)
+
     return variable
+
+
+#def create_orthog_loss(param, param_name):
+#    shape = tf.shape(param)
+#    rank = tf.rank(param)
+
+#    # Squash it to a rank 2 tensor (matrix).
+#    reshaped = tf.reshape(param, [-1, shape[rank-1]])
+
+#    reshaped_shape = tf.shape(reshaped)
+#    prod = tf.cond(reshaped_shape[0] < reshaped_shape[1],
+#                   lambda: tf.matmul(reshaped, tf.transpose(reshaped)),
+#                   lambda: tf.matmul(tf.transpose(reshaped), reshaped))
+#    loss = tf.nn.l2_loss(prod - tf.identity(prod),
+#                         name=param_name + '_orthog_reg_loss')
+#    return loss
+
+# Create a loss for orthogonal regularization of weights.
+def create_orthog_loss(param, param_name, shape):
+    rank = len(shape)
+    cols = shape[rank-1]
+    size = 1
+    for dim in shape:
+        size *= dim
+    rows = size // cols
+    # Squash it to a rank 2 tensor (matrix).
+    reshaped = tf.reshape(param, [rows, cols])
+    prod_dim = rows if rows < cols else cols
+    prod = tf.matmul(reshaped, tf.transpose(reshaped)) if rows < cols else \
+            tf.matmul(tf.transpose(reshaped), reshaped)
+    if prod_dim in identities:
+        ident = identities[prod_dim]
+    else:
+        ident = tf.constant(value = np.identity(prod_dim), dtype=tf.float32)
+        identities[prod_dim] = ident
+    loss = tf.nn.l2_loss(prod - ident, name=param_name + '_orthog_reg_loss') \
+            / tf.to_float(size)
+    #return loss, ident, prod
+    return loss
 
 
 def create_embedding_table_from_spec(param_spec):
@@ -75,12 +117,14 @@ def print_param(spec):
 
 
 class ParamSpec:
-    def __init__(self, name, shape, kind, dtype=tf.float32):
+    def __init__(self, name, shape, kind, regularization,
+                  dtype=tf.float32):
         self.name = name
         self.shape = shape
         self.dtype = dtype
         self.kind = kind
         self.computed_not_stored = None
+        self.regularization = regularization
 
     def size(self):
         siz = 1
@@ -89,16 +133,22 @@ class ParamSpec:
         return siz
 
 class StoredParm(ParamSpec):
-    def __init__(self, name, shape, kind, dtype=tf.float32,
+    def __init__(self, name, shape, kind, regularization,
+                 dtype=tf.float32,
                  initial_value=None):
-        ParamSpec.__init__(self, name, shape, kind, dtype)
+        ParamSpec.__init__(self, name=name, shape=shape, kind=kind,
+                           dtype=dtype,
+                           regularization=regularization)
         self.computed_not_stored = False
         self.initial_value = initial_value
 
 class ComputedParm(ParamSpec):
-    def __init__(self, name, shape, kind, dtype=tf.float32,
+    def __init__(self, name, shape, kind, regularization,
+                 dtype=tf.float32,
                  initial_value=None):
-        ParamSpec.__init__(self, name, shape, kind, dtype)
+        ParamSpec.__init__(self, name=name, shape=shape, kind=kind,
+                           dtype=dtype,
+                           regularization=regularization)
         self.computed_not_stored = True
         self.initial_value=initial_value
 
@@ -126,9 +176,13 @@ Args:
   parent: The parent dict to which we are adding parameters and subscopes
 
 '''
-def create_vars(spec_tree, computed_not_stored, parm_factory, parent=None):
+def create_vars(spec_tree, computed_not_stored, parm_factory,
+                parent=None, orthog_reg_losses=None):
     if parent is None:
         parent = dict()
+
+    if orthog_reg_losses is None:
+        orthog_reg_losses = []
 
     # Creation of parameters can be a two-stage process: creation of stored
     # variables might happen after creation of computed variables. In which
@@ -144,15 +198,31 @@ def create_vars(spec_tree, computed_not_stored, parm_factory, parent=None):
         for param_spec in spec_tree.params:
             if param_spec.computed_not_stored == computed_not_stored:
                 assert param_spec.name not in layer
-                if computed_not_stored:
-                    print_param(param_spec)
+#                if computed_not_stored:
+#                    print_param(param_spec)
                 layer[param_spec.name] = parm_factory(param_spec)
+
+                # We regularize whether-or-not the "param" is computed or
+                # stored.
+                if param_spec.regularization:
+#                    if param_spec.kind == 'bias':
+#                        reg_loss = create_bias_reg_loss(layer[param_spec.name],
+#                                                        param_spec.name,
+#                                                        param_spec.shape)
+
+#                    else:
+                        reg_loss = create_orthog_loss(layer[param_spec.name],
+                                                         param_spec.name,
+                                                         param_spec.shape)
+                        orthog_reg_losses.append(reg_loss)
 
         for item in spec_tree.children:
             # Recursively create subtrees.
             create_vars(item,
                         computed_not_stored,
                         parm_factory,
-                        layer)
+                        layer,
+                        orthog_reg_losses)
 
-    return parent
+    return (parent, orthog_reg_losses)
+

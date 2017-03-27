@@ -20,7 +20,6 @@ TEXT_ENCODER_CHANNELS = 8
 TEXT_ENCODER_OUTPUT_CHANNELS = 16 # 128 # 512
 LOCAL_CONDITION_CHANNELS = 16
 
-
 class TestParamMerge(tf.test.TestCase):
     def setUp(self):
         # Create text encoder network.
@@ -29,6 +28,7 @@ class TestParamMerge(tf.test.TestCase):
             histograms=False,
             output_channels=TEXT_ENCODER_OUTPUT_CHANNELS,
             local_condition_channels=LOCAL_CONDITION_CHANNELS,
+            elu_not_relu=True,
             layer_count=None,
             dilations=[1, 2, 4, 8, 16, 32, 64, 128, 256,
                        1, 2, 4, 8, 16, 32, 64, 128, 256,
@@ -37,7 +37,6 @@ class TestParamMerge(tf.test.TestCase):
             density_options=None,
             compute_the_params=True,
             non_computed_params=['text_embedding'])
-
 
         input_spec = InputSpec(
             kind='quantized_scalar',
@@ -135,6 +134,35 @@ class TestParamMerge(tf.test.TestCase):
             ctr = ctr + 1
 
         assert ctr > 1
+
+#    def testOrthogonalLoss(self):
+#        param_shape = [4,8]
+#        initializer=tf.contrib.layers.xavier_initializer_conv2d()
+#        param = tf.Variable(initializer(param_shape))
+#        init = tf.global_variables_initializer()
+#        prod = tf.matmul(param, tf.transpose(param))
+
+#        (loss_a, ident_a, prod_a) = create_orthog_loss(param, "dummy",
+#                                                       param_shape)
+
+#        with self.test_session() as sess:
+#            sess.run(init)
+#            [param_val, prod_val, loss_val, ident_val, prod_a_val] = sess.run([param, prod, loss_a, ident_a, prod_a])
+#            print("param_val:{}".format(param_val))
+#            print("=============================================")
+#            print("prod:{}".format(prod_val))
+#            print("=============================================")
+#            print("loss_val:{}".format(loss_val))
+#            print("=============================================")
+#            print("ident_val:{}".format(ident_val))
+#            print("=============================================")
+#            print("prod_a_val:{}".format(prod_a_val))
+
+
+
+
+
+
 
 
 
