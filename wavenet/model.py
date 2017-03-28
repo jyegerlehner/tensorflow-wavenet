@@ -185,13 +185,15 @@ class WaveNetModel(object):
                 name='gc_embedding',
                 shape=[self.global_condition_cardinality,
                        self.global_condition_channels],
-                kind='embedding'))
+                kind='embedding',
+                regularization=True)) #
 
         c.add_param(self._make_spec(
             name='input_embedding',
             shape=[self.softmax_channels,
                    self.residual_channels],
-            kind='embedding'))
+            kind='embedding',
+            regularization=True)) #
 
         c = t.add_child('dilated_stack')
         for i, dilation in enumerate(self.dilations):
@@ -208,13 +210,15 @@ class WaveNetModel(object):
                 shape=[self.filter_width,
                        input_channels,
                        self.dilation_channels],
-                kind='filter'))
+                kind='filter',
+                regularization=True)) #
             l.add_param(self._make_spec(
                 name='gate',
                 shape=[self.filter_width,
                        input_channels,
                        self.dilation_channels],
-                kind='filter'))
+                kind='filter',
+                regularization=True)) #
             l.add_param(self._make_spec(
                 name='dense',
                 shape=[1,
@@ -249,15 +253,18 @@ class WaveNetModel(object):
                 l.add_param(self._make_spec(
                     name='filter_bias',
                     shape=[self.dilation_channels],
-                    kind='bias'))
+                    kind='bias',
+                    regularization=True))
                 l.add_param(self._make_spec(
                     name='gate_bias',
                     shape=[self.dilation_channels],
-                    kind='bias'))
+                    kind='bias',
+                    regularization=True))
                 l.add_param(self._make_spec(
                     name='dense_bias',
                     shape=[self.residual_channels],
-                    kind='bias'))
+                    kind='bias',
+                    regularization=True))
 
         c = t.add_child('postprocessing')
         c.add_param(self._make_spec(
@@ -276,11 +283,13 @@ class WaveNetModel(object):
             c.add_param(self._make_spec(
                 name='postprocess1_bias',
                 shape=[self.skip_channels],
-                kind='bias'))
+                kind='bias',
+                regularization=True))
             c.add_param(self._make_spec(
                 name='postprocess2_bias',
                 shape=[self.skip_channels],
-                kind='bias'))
+                kind='bias',
+                regularization=True))
 
 #        if self.freqloss is not None:
 #            c.add_param(self._make_spec(

@@ -57,6 +57,19 @@ def create_orthog_loss(param, param_name, shape):
     #return loss, ident, prod
     return loss
 
+def create_bias_loss(param, param_name, shape):
+    rank = len(shape)
+    size = 1
+    for dim in shape:
+        size *= dim
+    abs_diff = 1.0 - tf.abs(param)
+    shrunken_diff = tf.clip_by_value(abs_diff, -10.0, 0.0)
+#    loss = tf.nn.l2_loss(shrunken_diff, name=param_name+'_bias_reg_loss') / \
+#                         tf.to_float(size)
+    loss = tf.reduce_mean(tf.abs(shrunken_diff),
+                          name=param_name+'_bias_reg_loss')
+    return loss
+
 
 def create_embedding_table_from_spec(param_spec):
     assert len(param_spec.shape) == 2
@@ -177,12 +190,12 @@ Args:
 
 '''
 def create_vars(spec_tree, computed_not_stored, parm_factory,
-                parent=None, orthog_reg_losses=None):
+                parent=None, reg_losses=None):
     if parent is None:
         parent = dict()
 
-    if orthog_reg_losses is None:
-        orthog_reg_losses = []
+    if reg_losses is None:
+        reg_losses = []
 
     # Creation of parameters can be a two-stage process: creation of stored
     # variables might happen after creation of computed variables. In which
@@ -205,16 +218,16 @@ def create_vars(spec_tree, computed_not_stored, parm_factory,
                 # We regularize whether-or-not the "param" is computed or
                 # stored.
                 if param_spec.regularization:
-#                    if param_spec.kind == 'bias':
-#                        reg_loss = create_bias_reg_loss(layer[param_spec.name],
-#                                                        param_spec.name,
-#                                                        param_spec.shape)
-
-#                    else:
+                    if param_spec.kind == 'bias':
+                        reg_loss = create_bias_loss(layer[param_spec.name],
+                                                        param_spec.name,
+                                                        param_spec.shape)
+                        reg_losses.append(reg_loss)
+                    else:
                         reg_loss = create_orthog_loss(layer[param_spec.name],
                                                          param_spec.name,
                                                          param_spec.shape)
-                        orthog_reg_losses.append(reg_loss)
+                        reg_losses.append(reg_loss)
 
         for item in spec_tree.children:
             # Recursively create subtrees.
@@ -222,7 +235,7 @@ def create_vars(spec_tree, computed_not_stored, parm_factory,
                         computed_not_stored,
                         parm_factory,
                         layer,
-                        orthog_reg_losses)
+                        reg_losses)
 
-    return (parent, orthog_reg_losses)
+    return (parent, reg_losses)
 

@@ -125,12 +125,14 @@ class ConvNetModel(object):
         c.add_param(self._make_spec(name='text_embedding',
                                     shape=[CHARACTER_CARDINALITY,
                                         self.encoder_channels],
-                                    kind='embedding'))
+                                    kind='embedding',
+                                    regularization=True)) #
         if self.density_conditioned:
             c.add_param(self._make_spec(name='density_embedding',
                                    shape=[DENSITY_QUANT_LEVELS,
                                           self.encoder_channels],
-                                   kind='embedding'))
+                                   kind='embedding',
+                                   regularization=True)) #
 
         c = t.add_child('layer_stack')
         l = c.add_child('input_skip')
@@ -138,19 +140,22 @@ class ConvNetModel(object):
                                     shape=[1,
                                            self.encoder_channels,
                                            self.output_channels],
-                                    kind='filter'))
+                                    kind='filter',
+                                    regularization=True)) #
         for layer in range(self.layer_count):
             l = c.add_child('layer{}'.format(layer))
             l.add_param(self._make_spec(name='filter',
                                     shape=[FILTER_WIDTH,
                                            self.encoder_channels,
                                            self.encoder_channels],
-                                    kind='filter'))
+                                    kind='filter',
+                                    regularization=True)) #
             l.add_param(self._make_spec(name='gate',
                                    shape=[FILTER_WIDTH,
                                           self.encoder_channels,
                                           self.encoder_channels],
-                                   kind='filter'))
+                                   kind='filter',
+                                   regularization=True)) #
             l.add_param(self._make_spec(name='skip',
                                    shape=[1,
                                           self.encoder_channels,
@@ -159,10 +164,12 @@ class ConvNetModel(object):
                                    regularization=True))
             l.add_param(self._make_spec(name='filter_bias',
                                    shape=[self.encoder_channels],
-                                   kind='bias'))
+                                   kind='bias',
+                                   regularization=True))
             l.add_param(self._make_spec(name='gate_bias',
                                    shape=[self.encoder_channels],
-                                   kind='bias'))
+                                   kind='bias',
+                                   regularization=True))
             if self.density_conditioned:
                 l.add_param(self._make_spec(name='sd_filt',
                                        shape=[1,
@@ -178,10 +185,12 @@ class ConvNetModel(object):
                                        regularization=True))
                 l.add_param(self._make_spec(name='sd_filt_bias',
                                        shape=[self.encoder_channels],
-                                       kind='bias'))
+                                       kind='bias',
+                                       regularization=True))
                 l.add_param(self._make_spec(name='sd_gate_bias',
                                        shape=[self.encoder_channels],
-                                       kind='bias'))
+                                       kind='bias',
+                                       regularization=True))
             if layer != self.layer_count-1:
                 l.add_param(self._make_spec(name='dense',
                                        shape=[1,
@@ -191,7 +200,8 @@ class ConvNetModel(object):
                                        regularization=True))
                 l.add_param(self._make_spec(name='dense_bias',
                                        shape=[self.encoder_channels],
-                                       kind='bias'))
+                                       kind='bias',
+                                       regularization=True))
 
         c = t.add_child('postprocessing')
         c.add_param(self._make_spec(name='postprocess1',
@@ -208,10 +218,12 @@ class ConvNetModel(object):
                                regularization=True))
         c.add_param(self._make_spec(name='bias1',
                                shape=[self.output_channels],
-                               kind='bias'))
+                               kind='bias',
+                               regularization=True))
         c.add_param(self._make_spec(name='bias2',
                                shape=[self.output_channels],
-                               kind='bias'))
+                               kind='bias',
+                               regularization=True))
         c.add_param(self._make_spec(name='lc_proj_filter',
                                shape=[1,
                                       self.output_channels,

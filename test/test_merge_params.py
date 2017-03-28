@@ -159,6 +159,29 @@ class TestParamMerge(tf.test.TestCase):
 #            print("prod_a_val:{}".format(prod_a_val))
 
 
+#    def testBiasLoss(self):
+#        def makeloss(param, param_name):
+#            abs_diff = 1.0 - tf.abs(param)
+#            shrunken_diff = tf.clip_by_value(abs_diff, -10.0, 0.0)
+#            loss = tf.nn.l2_loss(shrunken_diff, name=param_name+'_bias_reg_loss')
+#            return loss
+
+#        b1 = np.array([0.0, 0.5, -0.9])
+#        b2 = np.array([1.5, 0.0, 0.0])
+#        b3 = np.array([4.0, 0.0, 4.0])
+
+#        l1 = makeloss(b1, "1")
+#        l2 = makeloss(b2, "2")
+#        l3 = makeloss(b3, "3")
+
+#        with self.test_session() as sess:
+#            [l1_val, l2_val, l3_val] = sess.run([l1, l2, l3])
+
+#            print("l1:{}, l2:{}, l3:{}".format(l1_val, l2_val, l3_val))
+
+
+
+
 
 
 

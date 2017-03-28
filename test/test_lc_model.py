@@ -485,8 +485,7 @@ class TestLCNet(tf.test.TestCase):
 #                    plt.plot(freqs[indices], power_spectrum[indices])
 #                    plt.show()
 
-        (loss, orthog_reg_loss) = self.create_loss()
-
+        (loss, reg_loss) = self.create_loss()
 
         optimizer = optimizer_factory[self.optimizer_type](
                       learning_rate=self.learning_rate, momentum=self.momentum)
@@ -494,16 +493,18 @@ class TestLCNet(tf.test.TestCase):
         #optim = optimizer.minimize(loss, var_list=trainable)
         # clipped gradients:
 
-        if orthog_reg_loss is not None:
-            loss += orthog_reg_loss
+        total_loss = loss
+        if reg_loss is not None:
+            total_loss += reg_loss
 
-        grads_and_vars = optimizer.compute_gradients(loss, var_list=trainable)
+        grads_and_vars = optimizer.compute_gradients(total_loss, var_list=trainable)
         def ClipIfNotNone(grad):
                  if grad is None:
                      return grad
                  return tf.clip_by_value(grad, -1.0, 1.0)
 
-        capped_grads_and_vars = [(ClipIfNotNone(gv[0]), gv[1]) for gv in grads_and_vars]
+        capped_grads_and_vars = [(ClipIfNotNone(gv[0]),
+                                                gv[1]) for gv in grads_and_vars]
         def Norm(var):
             return tf.sqrt(tf.reduce_sum(tf.square(var)))
         var_norms = [Norm(gv[1]) for gv in grads_and_vars]
@@ -515,7 +516,7 @@ class TestLCNet(tf.test.TestCase):
         max_allowed_loss = 0.1
         loss_val = max_allowed_loss
         initial_loss = None
-        operations = [loss, optim]
+        operations = [loss, optim, reg_loss]
         # operations.extend(var_norms)
 
         if speaker_ids is not None:
@@ -551,7 +552,7 @@ class TestLCNet(tf.test.TestCase):
             feed_dict = {self.audio_placeholder: audio,
                          self.ascii_placeholder: ascii}
 
-            initial_loss = sess.run(loss, feed_dict=feed_dict)
+            initial_loss = sess.run(total_loss, feed_dict=feed_dict)
 
             for i in range(self.train_iters):
 #                if i % len(audio) == 0:
@@ -566,8 +567,8 @@ class TestLCNet(tf.test.TestCase):
                 results = sess.run(operations, feed_dict=feed_dict)
 
                 if i % 10 == 0:
-                    print("i: %d loss: %f, text: %s, duration_ratio: %s" % \
-                        (i, results[0], ascii, duration_ratio))
+                    print("i: %d loss: %f, reg loss:%f text: %s, duration_ratio: %s" % \
+                        (i, results[0], results[2], ascii, duration_ratio))
 #                    for result in results:
 #                        print("Result:{}".format(result))
 
@@ -635,7 +636,7 @@ class TestHyperTraining(TestLCNet):
             dilation_channels=32,
             quantization_channels=QUANTIZATION_CHANNELS,
             elu_not_relu=True,
-            use_biases=False,
+            use_biases=True,
             skip_channels=256,
             local_condition_channels=LOCAL_CONDITION_CHANNELS,
             gated_linear=False,
