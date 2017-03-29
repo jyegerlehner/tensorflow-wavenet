@@ -224,8 +224,7 @@ def create_loss(audio_batch, text_batch, loss_prefix, gc_id_batch,
     loss = net.loss(input_batch=audio_batch,
                     global_condition_batch=gc_id_batch,
                     local_condition_batch=local_conditions,
-                    loss_prefix=loss_prefix,
-                    l2_regularization_strength=0.0)
+                    loss_prefix=loss_prefix)
     return (loss, sample_density)
 
 def main():
@@ -342,6 +341,8 @@ def main():
                        text_encoder=text_encoder,
                        param_producer=param_producer)
 
+    regularization_loss = net.orthog_loss()
+
     if test_text_batch is not None:
         test_text_batch = tf.squeeze(test_text_batch)
         (test_loss, test_sample_density) = create_loss(
@@ -368,6 +369,7 @@ def main():
                     momentum=args.momentum)
     trainable = tf.trainable_variables()
     optim = optimizer.minimize(loss, var_list=trainable)
+    reg_optim = optimizer.minimize(regularization_loss, var_list = trainable)
 
     # Set up logging for TensorBoard.
     writer = tf.summary.FileWriter(logdir)
@@ -376,7 +378,8 @@ def main():
     summaries = tf.summary.merge_all()
 
     # Set up session
-    with tf.Session(config=tf.ConfigProto(log_device_placement=False)) as sess:
+    with tf.Session(config=tf.ConfigProto(log_device_placement=False,
+                    intra_op_parallelism_threads=4)) as sess:
         init = tf.global_variables_initializer()
         sess.run(init)
 
@@ -407,6 +410,10 @@ def main():
                 if coord.should_stop():
                     break
                 start_time = time.time()
+                # Run the regularization op.
+                [_, reg_loss_val] = sess.run([reg_optim,
+                                              regularization_loss])
+
                 if args.store_metadata and step % 50 == 0:
                     # Slow run that stores extra information for debugging.
                     print('Storing metadata')
@@ -439,9 +446,10 @@ def main():
 
                 duration = time.time() - start_time
                 print('step {:d} - loss = {:.3f}, last test loss = {:3f},'
+                      'reg loss = {:.5f}, '
                       ' ({:.3f} sec/step), samp density = {:2} {}'
-                      .format(step, loss_value, test_loss_value, duration,
-                              sample_density_value, test_computed))
+                      .format(step, loss_value, test_loss_value, reg_loss_val,
+                              duration, sample_density_value, test_computed))
 
                 if step % args.checkpoint_every == 0:
                     save(saver, sess, logdir, step)
